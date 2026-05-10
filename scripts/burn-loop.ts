@@ -1,0 +1,498 @@
+/**
+ * stacSOL burn loop
+ *
+ * Every 5 minutes:
+ *   1. Find every Token-2022 token account for the stacSOL mint whose
+ *      TransferFeeAmount.withheld_amount ≥ MIN_CLAIM (default 0.001 stacSOL).
+ *   2. WithdrawWithheldTokensFromAccounts → our manager ATA, in chunks.
+ *   3. BurnChecked everything sitting in our manager ATA via the Token-2022
+ *      program.
+ *   4. Run the SPL stake pool's update flow
+ *      (UpdateValidatorListBalance + UpdateStakePoolBalance + Cleanup) to
+ *      reconcile pool.pool_token_supply with the new mint.supply, so the
+ *      rate gain materializes in redemption math immediately.
+ *
+ * Without step 4, mint.supply drops but the program's pool_token_supply
+ * lags — WithdrawSol would still pay out at the old, lower rate until the
+ * next epoch's natural sync. With step 4, the rate is live every cycle.
+ *
+ * Requires: a keypair JSON file holding the manager authority (the same
+ * pubkey configured as withdraw-withheld authority on the mint AND owner
+ * of the destination ATA).
+ *
+ * Usage:
+ *   RPC_URL="https://your-rpc/key"  \
+ *   KEYPAIR=./manager.json          \
+ *   bun run scripts/burn-loop.ts
+ *
+ *   # or pass the key directly (handy for Railway/Vercel/etc):
+ *   RPC_URL="https://your-rpc/key"  \
+ *   KEYPAIR_JSON="$(cat manager.json)" \
+ *   bun run scripts/burn-loop.ts
+ */
+
+import {
+  ComputeBudgetProgram,
+  Connection,
+  Keypair,
+  PublicKey,
+  SystemProgram,
+  Transaction,
+  TransactionInstruction,
+} from '@solana/web3.js'
+import fs from 'node:fs'
+
+// ------------------------------------------------------------------- config
+const MINT = new PublicKey('6K4xdfEk5rvySM496rxm4x8AgC9wVt7N4C7mFFpNAj5f')
+const TOKEN_2022 = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb')
+const ATA_PROGRAM = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL')
+const POOL_PROGRAM = new PublicKey('SP12tWFxD9oJsVWNavTTBZvMbA6gkAmxtVgxdqvyvhY')
+const POOL = new PublicKey('E6oqvrLKexQwFJyCnQ8ewx8xt9tQo7uezat24f5Qixqb')
+const SYSVAR_CLOCK = new PublicKey('SysvarC1ock11111111111111111111111111111111')
+const SYSVAR_STAKE_HISTORY = new PublicKey('SysvarStakeHistory1111111111111111111111111')
+const STAKE_PROGRAM = new PublicKey('Stake11111111111111111111111111111111111111')
+const DECIMALS = 9
+const MIN_CLAIM_TOKENS = 0.001
+const MIN_CLAIM = BigInt(Math.floor(MIN_CLAIM_TOKENS * 10 ** DECIMALS))
+const TICK_MS = 5 * 60 * 1000
+const CHUNK = 20 // source accounts per WithdrawWithheld tx
+
+const RPC_URL = process.env.RPC_URL
+if (!RPC_URL) {
+  throw new Error(
+    'set RPC_URL env var (any Solana mainnet RPC with reasonable rate limits)',
+  )
+}
+
+// Two ways to provide the manager keypair, in priority order:
+//   1. KEYPAIR_JSON — the raw JSON array (preferred for Railway/Vercel/etc
+//      where a filesystem-mounted secret is awkward).
+//   2. KEYPAIR — filesystem path to a Solana CLI keypair JSON (preferred for
+//      local dev where the file already exists).
+function loadAuthority(): Keypair {
+  const raw = process.env.KEYPAIR_JSON
+  if (raw && raw.trim()) {
+    return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(raw)))
+  }
+  const path = process.env.KEYPAIR
+  if (!path) {
+    throw new Error(
+      'provide manager keypair via KEYPAIR=/path/to/keypair.json or ' +
+        'KEYPAIR_JSON="$(cat keypair.json)"',
+    )
+  }
+  return Keypair.fromSecretKey(
+    Uint8Array.from(JSON.parse(fs.readFileSync(path, 'utf-8'))),
+  )
+}
+
+// Construct with an explicit non-functional ws endpoint so confirmTransaction
+// and friends don't try to open subscriptions. We poll signatures over HTTP
+// instead — Helius's ws was returning non-101 (likely plan limit / auth) and
+// the unhandled errors from the bundled ws client were crashing the process.
+const conn = new Connection(RPC_URL, {
+  commitment: 'confirmed',
+  wsEndpoint: 'wss://localhost:1', // intentionally invalid; we never subscribe
+  disableRetryOnRateLimit: false,
+  confirmTransactionInitialTimeout: 60_000,
+})
+const authority = loadAuthority()
+
+// ----------------------------------------------------------- resilience
+const RETRIES = 3
+const BACKOFF_MS = 1500
+const CONFIRM_POLL_MS = 2000
+const CONFIRM_TIMEOUT_MS = 90_000
+
+/** Best-effort retry around any RPC call. Logs each attempt. */
+async function withRetry<T>(label: string, fn: () => Promise<T>): Promise<T> {
+  let lastErr: unknown
+  for (let i = 0; i < RETRIES; i++) {
+    try {
+      return await fn()
+    } catch (e) {
+      lastErr = e
+      const msg = (e as Error)?.message ?? String(e)
+      if (i < RETRIES - 1) {
+        log(`${label} retry ${i + 1}/${RETRIES - 1}: ${msg}`)
+        await sleep(BACKOFF_MS * (i + 1))
+      }
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr))
+}
+
+/**
+ * Poll signature status over HTTP instead of via the ws subscription used by
+ * Connection.confirmTransaction. Returns when confirmed/finalized/errored, or
+ * when the blockhash expires, or after CONFIRM_TIMEOUT_MS.
+ */
+async function confirmByPolling(
+  sig: string,
+  lastValidBlockHeight: number,
+): Promise<{ err: unknown }> {
+  const start = Date.now()
+  while (Date.now() - start < CONFIRM_TIMEOUT_MS) {
+    try {
+      const res = await conn.getSignatureStatuses([sig], { searchTransactionHistory: false })
+      const status = res.value[0]
+      if (status) {
+        if (status.err) return { err: status.err }
+        if (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized') {
+          return { err: null }
+        }
+      }
+      const bh = await conn.getBlockHeight('confirmed')
+      if (bh > lastValidBlockHeight) return { err: 'blockhash expired before confirmation' }
+    } catch {
+      /* RPC blip — sleep and retry */
+    }
+    await sleep(CONFIRM_POLL_MS)
+  }
+  return { err: 'confirmation timeout' }
+}
+
+// Process-level error handlers — log and keep the loop alive.
+process.on('unhandledRejection', (err) => {
+  const msg = err instanceof Error ? err.message : String(err)
+  log(`UNHANDLED REJECTION (suppressed): ${msg}`)
+})
+process.on('uncaughtException', (err) => {
+  log(`UNCAUGHT EXCEPTION (suppressed): ${err.message}`)
+})
+process.on('SIGINT', () => {
+  log('SIGINT — shutting down')
+  process.exit(0)
+})
+
+// ----------------------------------------------------------- byte helpers
+const u64le = (v: bigint | number) => {
+  const n = BigInt(v)
+  const out = Buffer.alloc(8)
+  out.writeBigUInt64LE(n, 0)
+  return out
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+const fmtTok = (n: bigint) =>
+  (Number(n) / 10 ** DECIMALS).toLocaleString(undefined, {
+    maximumFractionDigits: 6,
+  })
+
+// ----------------------------------------------------------- pdas
+function deriveAta(owner: PublicKey) {
+  const [ata] = PublicKey.findProgramAddressSync(
+    [owner.toBytes(), TOKEN_2022.toBytes(), MINT.toBytes()],
+    ATA_PROGRAM,
+  )
+  return ata
+}
+
+// ----------------------------------------------------------- instructions
+function ixCreateAtaIdempotent(payer: PublicKey, owner: PublicKey) {
+  const ata = deriveAta(owner)
+  return new TransactionInstruction({
+    programId: ATA_PROGRAM,
+    keys: [
+      { pubkey: payer, isSigner: true, isWritable: true },
+      { pubkey: ata, isSigner: false, isWritable: true },
+      { pubkey: owner, isSigner: false, isWritable: false },
+      { pubkey: MINT, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: TOKEN_2022, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.from([1]), // CreateIdempotent
+  })
+}
+
+// Token-2022 instruction 26 = TransferFeeExtension; sub-discriminator 3 =
+// WithdrawWithheldTokensFromAccounts. The sub-ix carries `num_token_accounts:
+// u8` as a packed argument — without it the program rejects with 0xc
+// InvalidInstruction. Account list:
+//   0  mint                       (writable)
+//   1  destination token account  (writable)
+//   2  withdraw-withheld authority (signer)
+//   3+ source token accounts      (writable)
+function ixWithdrawWithheld(sources: PublicKey[], destination: PublicKey) {
+  if (sources.length === 0 || sources.length > 0xff) {
+    throw new Error(`invalid source count: ${sources.length}`)
+  }
+  return new TransactionInstruction({
+    programId: TOKEN_2022,
+    keys: [
+      { pubkey: MINT, isSigner: false, isWritable: true },
+      { pubkey: destination, isSigner: false, isWritable: true },
+      { pubkey: authority.publicKey, isSigner: true, isWritable: false },
+      ...sources.map((pk) => ({ pubkey: pk, isSigner: false, isWritable: true })),
+    ],
+    data: Buffer.from([26, 3, sources.length]),
+  })
+}
+
+// Token-2022 BurnChecked = 15. Data: [15, amount: u64, decimals: u8]
+function ixBurnChecked(account: PublicKey, amount: bigint) {
+  return new TransactionInstruction({
+    programId: TOKEN_2022,
+    keys: [
+      { pubkey: account, isSigner: false, isWritable: true },
+      { pubkey: MINT, isSigner: false, isWritable: true },
+      { pubkey: authority.publicKey, isSigner: true, isWritable: false },
+    ],
+    data: Buffer.concat([Buffer.from([15]), u64le(amount), Buffer.from([DECIMALS])]),
+  })
+}
+
+// SPL stake pool — UpdateValidatorListBalance (variant 6).
+// Data: [6, start_index: u32, no_merge: bool]
+function ixUpdateValidatorListBalance(validatorList: PublicKey, reserveStake: PublicKey) {
+  const [withdrawAuth] = PublicKey.findProgramAddressSync(
+    [POOL.toBytes(), new TextEncoder().encode('withdraw')],
+    POOL_PROGRAM,
+  )
+  const data = Buffer.alloc(6)
+  data.writeUInt8(6, 0)
+  data.writeUInt32LE(0, 1)
+  data.writeUInt8(0, 5)
+  return new TransactionInstruction({
+    programId: POOL_PROGRAM,
+    keys: [
+      { pubkey: POOL, isSigner: false, isWritable: false },
+      { pubkey: withdrawAuth, isSigner: false, isWritable: false },
+      { pubkey: validatorList, isSigner: false, isWritable: true },
+      { pubkey: reserveStake, isSigner: false, isWritable: true },
+      { pubkey: SYSVAR_CLOCK, isSigner: false, isWritable: false },
+      { pubkey: SYSVAR_STAKE_HISTORY, isSigner: false, isWritable: false },
+      { pubkey: STAKE_PROGRAM, isSigner: false, isWritable: false },
+    ],
+    data,
+  })
+}
+
+// SPL stake pool — UpdateStakePoolBalance (variant 7). Data: [7]
+// Reconciles pool.total_lamports with reserve+VSAs AND syncs
+// pool.pool_token_supply with the live mint.supply.
+function ixUpdateStakePoolBalance(
+  validatorList: PublicKey,
+  reserveStake: PublicKey,
+  managerFeeAccount: PublicKey,
+) {
+  const [withdrawAuth] = PublicKey.findProgramAddressSync(
+    [POOL.toBytes(), new TextEncoder().encode('withdraw')],
+    POOL_PROGRAM,
+  )
+  return new TransactionInstruction({
+    programId: POOL_PROGRAM,
+    keys: [
+      { pubkey: POOL, isSigner: false, isWritable: true },
+      { pubkey: withdrawAuth, isSigner: false, isWritable: false },
+      { pubkey: validatorList, isSigner: false, isWritable: true },
+      { pubkey: reserveStake, isSigner: false, isWritable: false },
+      { pubkey: managerFeeAccount, isSigner: false, isWritable: true },
+      { pubkey: MINT, isSigner: false, isWritable: true },
+      { pubkey: TOKEN_2022, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.from([7]),
+  })
+}
+
+// SPL stake pool — CleanupRemovedValidatorEntries (variant 8). Data: [8]
+function ixCleanupRemovedValidatorEntries(validatorList: PublicKey) {
+  return new TransactionInstruction({
+    programId: POOL_PROGRAM,
+    keys: [
+      { pubkey: POOL, isSigner: false, isWritable: false },
+      { pubkey: validatorList, isSigner: false, isWritable: true },
+    ],
+    data: Buffer.from([8]),
+  })
+}
+
+// Read pool's validator_list, reserve_stake, manager_fee_account from chain.
+async function fetchPoolRefs() {
+  const acc = await withRetry('fetchPoolRefs', () => conn.getAccountInfo(POOL, 'confirmed'))
+  if (!acc) throw new Error('pool not found')
+  const d = acc.data
+  return {
+    validatorList: new PublicKey(d.subarray(98, 130)),
+    reserveStake: new PublicKey(d.subarray(130, 162)),
+    managerFeeAccount: new PublicKey(d.subarray(194, 226)),
+    poolTotalLamports: d.readBigUInt64LE(258),
+    poolTokenSupply: d.readBigUInt64LE(266),
+  }
+}
+
+// ----------------------------------------------------------- tx send
+async function sendIxs(ixs: TransactionInstruction[], label: string) {
+  if (ixs.length === 0) return
+  const tx = new Transaction()
+  tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: 600_000 }))
+  for (const ix of ixs) tx.add(ix)
+  tx.feePayer = authority.publicKey
+
+  const { blockhash, lastValidBlockHeight } = await withRetry(
+    `${label} blockhash`,
+    () => conn.getLatestBlockhash('confirmed'),
+  )
+  tx.recentBlockhash = blockhash
+  tx.sign(authority)
+
+  const sig = await withRetry(`${label} send`, () =>
+    conn.sendRawTransaction(tx.serialize(), { skipPreflight: false }),
+  )
+  log(`${label} sent ${sig}`)
+
+  const conf = await confirmByPolling(sig, lastValidBlockHeight)
+  if (conf.err) {
+    log(`${label} FAILED ${JSON.stringify(conf.err)}`)
+  } else {
+    log(`${label} confirmed`)
+  }
+}
+
+// ----------------------------------------------------------- discovery
+// Token-2022 token account layout w/ TransferFeeAmount extension:
+//   0..32   mint
+//   32..64  owner
+//   64..72  amount
+//   ...
+//   165     account_type (=2)
+//   166+    TLV extensions
+//
+// We pull every account where mint==MINT (memcmp at offset 0) then walk the
+// TLV stream client-side to read the withheld balance.
+async function findAccountsWithWithheld() {
+  const accs = await withRetry('getProgramAccounts', () =>
+    conn.getProgramAccounts(TOKEN_2022, {
+      commitment: 'confirmed',
+      filters: [
+        { memcmp: { offset: 0, bytes: MINT.toBase58() } },
+      ],
+    }),
+  )
+  const result: { pubkey: PublicKey; withheld: bigint; balance: bigint }[] = []
+  for (const { pubkey, account } of accs) {
+    const d = account.data
+    // Skip if not a token account (account_type byte at 165 must be 2).
+    if (d.length <= 165 || d[165] !== 2) continue
+    const balance = d.readBigUInt64LE(64)
+    let off = 166
+    let withheld = 0n
+    while (off + 4 <= d.length) {
+      const type = d.readUInt16LE(off)
+      const len = d.readUInt16LE(off + 2)
+      if (type === 0) break
+      if (type === 2 /* TransferFeeAmount */) {
+        withheld = d.readBigUInt64LE(off + 4)
+        break
+      }
+      off += 4 + len
+    }
+    if (withheld >= MIN_CLAIM) result.push({ pubkey, withheld, balance })
+  }
+  return result
+}
+
+async function readBalance(ata: PublicKey): Promise<bigint> {
+  const acc = await withRetry('readBalance', () => conn.getAccountInfo(ata, 'processed'))
+  if (!acc) return 0n
+  return acc.data.readBigUInt64LE(64)
+}
+
+// ----------------------------------------------------------- log
+function log(msg: string) {
+  const t = new Date().toISOString().replace('T', ' ').slice(0, 19)
+  console.log(`[${t}] ${msg}`)
+}
+
+// ----------------------------------------------------------- tick
+async function tick() {
+  const ata = deriveAta(authority.publicKey)
+  log(`tick — authority ${authority.publicKey.toBase58()} ata ${ata.toBase58()}`)
+
+  // 1. Discover accounts with withheld ≥ MIN_CLAIM.
+  const candidates = await findAccountsWithWithheld()
+  const totalWithheld = candidates.reduce((s, a) => s + a.withheld, 0n)
+  log(
+    `found ${candidates.length} candidate account(s), total withheld = ${fmtTok(totalWithheld)} stacSOL`,
+  )
+
+  // 2. Withdraw withheld → our ATA, in chunks (ensure ATA exists once).
+  if (candidates.length > 0) {
+    const ataAcc = await conn.getAccountInfo(ata, 'processed')
+    if (!ataAcc) {
+      await sendIxs(
+        [ixCreateAtaIdempotent(authority.publicKey, authority.publicKey)],
+        'create-ata',
+      )
+    }
+    for (let i = 0; i < candidates.length; i += CHUNK) {
+      const chunk = candidates.slice(i, i + CHUNK)
+      const sum = chunk.reduce((s, c) => s + c.withheld, 0n)
+      try {
+        await sendIxs(
+          [ixWithdrawWithheld(chunk.map((c) => c.pubkey), ata)],
+          `withdraw-withheld[${chunk.length} accts, ${fmtTok(sum)} stacSOL]`,
+        )
+      } catch (e) {
+        log(`withdraw-withheld error: ${(e as Error).message}`)
+      }
+    }
+  }
+
+  // 3. Burn whatever sits in our ATA right now.
+  const balance = await readBalance(ata)
+  log(`ata balance after harvest: ${fmtTok(balance)} stacSOL`)
+  let burned = false
+  if (balance > 0n) {
+    try {
+      await sendIxs([ixBurnChecked(ata, balance)], `burn ${fmtTok(balance)} stacSOL`)
+      burned = true
+    } catch (e) {
+      log(`burn error: ${(e as Error).message}`)
+    }
+  }
+
+  // 4. Sync the pool's accounting so the rate gain materializes for redeemers.
+  //    Skip if we didn't burn anything this tick (no drift to clear).
+  if (burned) {
+    try {
+      const refs = await fetchPoolRefs()
+      await sendIxs(
+        [
+          ixUpdateValidatorListBalance(refs.validatorList, refs.reserveStake),
+          ixUpdateStakePoolBalance(refs.validatorList, refs.reserveStake, refs.managerFeeAccount),
+          ixCleanupRemovedValidatorEntries(refs.validatorList),
+        ],
+        'update-pool-balance',
+      )
+      const refsAfter = await fetchPoolRefs()
+      const rate = Number(refsAfter.poolTotalLamports) / Number(refsAfter.poolTokenSupply)
+      log(`pool rate now: ${rate.toFixed(6)} SOL/stacSOL`)
+    } catch (e) {
+      log(`update-pool error: ${(e as Error).message}`)
+    }
+  }
+}
+
+// ----------------------------------------------------------- main loop
+async function main() {
+  log(`starting burn-loop · interval=${TICK_MS / 1000}s · min-claim=${MIN_CLAIM_TOKENS} stacSOL`)
+  const keypairSource = process.env.KEYPAIR_JSON
+    ? 'env:KEYPAIR_JSON'
+    : `file:${process.env.KEYPAIR}`
+  log(`rpc=${RPC_URL.split('?')[0]}? · keypair=${keypairSource} · authority=${authority.publicKey.toBase58()}`)
+  // run immediately, then every TICK_MS
+  while (true) {
+    try {
+      await tick()
+    } catch (e) {
+      log(`tick error: ${(e as Error).message}`)
+    }
+    await sleep(TICK_MS)
+  }
+}
+
+main().catch((e) => {
+  log(`fatal: ${(e as Error).message}`)
+  process.exit(1)
+})

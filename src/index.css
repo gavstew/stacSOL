@@ -1,0 +1,100 @@
+@import "tailwindcss";
+@import "@solana/wallet-adapter-react-ui/styles.css";
+
+@theme {
+  /* darker, deeper bg */
+  --color-bg: #080203;
+  --color-bg2: #160809;
+  /* main text is now warm cream — orange was overwhelming */
+  --color-fg: #f6e7d3;
+  /* hot red kept for accents/headings only */
+  --color-hot: #ff2200;
+  /* mid-orange for emphasis sub-text */
+  --color-ember: #ff7733;
+  --color-warn: #ffcc00;
+  /* cooler dim */
+  --color-dim: #6b4435;
+  --color-green: #22ee88;
+  --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace;
+  --font-display: "Inter", system-ui, sans-serif;
+}
+
+/* Display font for headings (h1, section h2). Body stays mono for that
+   data-terminal vibe; headings switch to a tight modern sans-serif. */
+h1, h2 { font-family: var(--font-display); }
+.tabular-mono { font-variant-numeric: tabular-nums; font-family: var(--font-mono); }
+
+@keyframes flash {
+  0%   { color: var(--color-hot); text-shadow: 0 0 6px rgba(255, 51, 0, 0.6); }
+  100% { /* settle to inherited */ }
+}
+
+@keyframes flicker {
+  0%, 100% { opacity: 1; text-shadow: 0 0 4px var(--color-hot), 0 0 12px rgba(255,34,0,0.55); }
+  47%      { opacity: 0.85; text-shadow: 0 0 2px var(--color-hot); }
+  49%      { opacity: 1; text-shadow: 0 0 4px var(--color-hot), 0 0 12px rgba(255,34,0,0.55); }
+  53%      { opacity: 0.7; text-shadow: 0 0 8px var(--color-hot); }
+  55%      { opacity: 1; text-shadow: 0 0 4px var(--color-hot), 0 0 12px rgba(255,34,0,0.55); }
+}
+
+@keyframes scanline {
+  0%   { transform: translateY(-100%); }
+  100% { transform: translateY(120%); }
+}
+
+/* Card hover — more dramatic. Scale, glow, top-edge highlight. */
+.card-hot {
+  position: relative;
+  transition:
+    border-color 200ms ease,
+    box-shadow 250ms ease,
+    transform 250ms ease,
+    background-color 250ms ease;
+}
+.card-hot::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 250ms ease;
+  background: linear-gradient(180deg, rgba(255, 34, 0, 0.10), transparent 40%);
+}
+.card-hot:hover {
+  border-color: rgba(255, 34, 0, 0.7) !important;
+  box-shadow:
+    0 0 0 1px rgba(255, 34, 0, 0.55),
+    0 0 28px -6px rgba(255, 34, 0, 0.55),
+    inset 0 1px 0 0 rgba(255, 119, 51, 0.35);
+  transform: translateY(-2px) scale(1.003);
+  background-color: rgba(28, 8, 9, 1) !important;
+}
+.card-hot:hover::before { opacity: 1; }
+
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background:
+    radial-gradient(ellipse 80% 50% at 50% 0%, #2a0808 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 80% 100%, #200505 0%, transparent 60%),
+    var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+}
+
+.wallet-adapter-button {
+  background: var(--color-hot) !important;
+  color: #000 !important;
+  border-radius: 4px !important;
+  font-family: var(--font-mono) !important;
+  font-weight: 700 !important;
+  letter-spacing: 1px !important;
+  text-transform: uppercase !important;
+  height: auto !important;
+  padding: 10px 16px !important;
+}
+.wallet-adapter-button:not(:disabled):hover { filter: brightness(1.15); }
+.wallet-adapter-modal-wrapper { background: var(--color-bg2) !important; border: 1px solid var(--color-hot) !important; }
+.wallet-adapter-modal-title { color: var(--color-hot) !important; }
+.wallet-adapter-modal-list .wallet-adapter-button { background: transparent !important; color: var(--color-fg) !important; border: 1px solid var(--color-dim) !important; }

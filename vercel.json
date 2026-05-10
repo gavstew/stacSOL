@@ -1,0 +1,25 @@
+{
+  "crons": [
+    {
+      "path": "/api/snapshot",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/referral-index",
+      "schedule": "*/5 * * * *"
+    }
+  ],
+  "rewrites": [
+    { "source": "/api/hawkfi/:path*", "destination": "/api/hawkfi?_path=/:path*" },
+    { "source": "/guide", "destination": "/index.html" },
+    { "source": "/guide/(.*)", "destination": "/index.html" },
+    { "source": "/liquidity", "destination": "/index.html" },
+    { "source": "/liquidity/(.*)", "destination": "/index.html" },
+    { "source": "/singlesided", "destination": "/index.html" },
+    { "source": "/singlesided/(.*)", "destination": "/index.html" },
+    { "source": "/portfolio", "destination": "/index.html" },
+    { "source": "/portfolio/(.*)", "destination": "/index.html" },
+    { "source": "/faq", "destination": "/index.html" },
+    { "source": "/faq/(.*)", "destination": "/index.html" }
+  ]
+}
