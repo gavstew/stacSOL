@@ -1,10 +1,13 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { Connection, PublicKey } from '@solana/web3.js'
 import { ensureSchema, getPool } from './_db.js'
 import { fetchAllStacsolMarkets, pickLpPriceSol } from './_birdeye.js'
+import {
+  decodeAccountData,
+  getAccountInfoBase64,
+} from './_solana-rpc.js'
 
-const POOL = new PublicKey('E6oqvrLKexQwFJyCnQ8ewx8xt9tQo7uezat24f5Qixqb')
-const MINT = new PublicKey('6K4xdfEk5rvySM496rxm4x8AgC9wVt7N4C7mFFpNAj5f')
+const POOL = 'E6oqvrLKexQwFJyCnQ8ewx8xt9tQo7uezat24f5Qixqb'
+const MINT = '6K4xdfEk5rvySM496rxm4x8AgC9wVt7N4C7mFFpNAj5f'
 
 // Get the deepest SOL-paired LP price (excluding the Sanctum protocol pool
 // itself, which would just be NAV). Falls back to null on any error so the
@@ -18,13 +21,11 @@ async function fetchLpPriceSol(): Promise<number | null> {
     if (fromMarkets != null && isFinite(fromMarkets) && fromMarkets > 0) {
       return fromMarkets
     }
-    // Fallback: ask Jupiter (paid tier) for an actual quote — handles cases
-    // where Birdeye lists no SOL-paired market but Jupiter can still route.
     const jup = process.env.JUPITER_API_KEY
     if (!jup) return null
     const q = await fetch(
       'https://api.jup.ag/swap/v1/quote' +
-        '?inputMint=' + MINT.toBase58() +
+        '?inputMint=' + MINT +
         '&outputMint=So11111111111111111111111111111111111111112' +
         '&amount=1000000000' +
         '&slippageBps=500' +
@@ -43,29 +44,30 @@ async function fetchLpPriceSol(): Promise<number | null> {
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     await ensureSchema()
-
-    const rpc = process.env.RPC_URL || 'https://api.mainnet-beta.solana.com'
-    const conn = new Connection(rpc, 'confirmed')
+    const endpoint = process.env.RPC_URL || 'https://api.mainnet-beta.solana.com'
 
     const [poolAcc, mintAcc, lpPriceSol] = await Promise.all([
-      conn.getAccountInfo(POOL, 'processed'),
-      conn.getAccountInfo(MINT, 'processed'),
+      getAccountInfoBase64(endpoint, POOL, 'processed'),
+      getAccountInfoBase64(endpoint, MINT, 'processed'),
       fetchLpPriceSol(),
     ])
     if (!poolAcc) throw new Error('pool not found')
     if (!mintAcc) throw new Error('mint not found')
 
-    const d = poolAcc.data
-    const reserveStake = new PublicKey(d.subarray(130, 162))
+    const d = decodeAccountData(poolAcc)
+    const reserveStakeBytes = d.subarray(130, 162)
+    // Encode reserveStake as base58 string for the follow-up RPC call.
+    const reserveStake = bytesToBase58(reserveStakeBytes)
     const totalLamports = d.readBigUInt64LE(258)
     const poolTokenSupply = d.readBigUInt64LE(266)
     const lastUpdateEpoch = d.readBigUInt64LE(274)
 
-    const reserveAcc = await conn.getAccountInfo(reserveStake, 'processed')
+    const reserveAcc = await getAccountInfoBase64(endpoint, reserveStake, 'processed')
     if (!reserveAcc) throw new Error('reserve not found')
 
     const reserveLamports = BigInt(reserveAcc.lamports)
-    const mintSupply = mintAcc.data.readBigUInt64LE(36)
+    const mintBuf = decodeAccountData(mintAcc)
+    const mintSupply = mintBuf.readBigUInt64LE(36)
     const rate = Number(totalLamports) / Number(poolTokenSupply || 1n)
 
     await getPool().query(
@@ -97,4 +99,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     console.error('snapshot error:', e)
     res.status(500).json({ ok: false, error: (e as Error).message })
   }
+}
+
+// Inline base58 encoder (no external dep beyond what we already import via
+// _solana-rpc -> bs58). Imported lazily here to keep the top of the file
+// dep-free.
+import bs58 from 'bs58'
+function bytesToBase58(b: Uint8Array): string {
+  return bs58.encode(b)
 }

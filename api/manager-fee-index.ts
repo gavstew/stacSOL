@@ -11,16 +11,14 @@ import {
   type SignatureInfo,
 } from './_solana-rpc.js'
 
-// Indexes the *referral fee* leg of every DepositSol on the stacSOL pool —
-// account index 6 (referrer_ata) of variants 14 (DepositSol) and 24
-// (DepositSolWithSlippage). Mirrors api/manager-fee-index.ts (same shape,
-// different account index). We use the raw-fetch _solana-rpc helpers
-// instead of @solana/web3.js because the latter's rpc-websockets → uuid
-// chain breaks under @vercel/node's CJS runtime — ERR_REQUIRE_ESM took
-// the original web3.js-based implementation of this endpoint down in
-// production, leaving referral_credits empty.
-const POOL = 'E6oqvrLKexQwFJyCnQ8ewx8xt9tQo7uezat24f5Qixqb'
+// Mirror of api/referral-index.ts but for the *manager fee* leg of every
+// DepositSol — i.e. account index 5 (manager_fee_ata). Lets us track who's
+// been earning protocol fees in stacSOL form without paying any SOL for
+// them. Surfaced separately in the leaderboard so we can distinguish
+// "earned via the protocol's deposit-fee mechanism" from "bought stacSOL
+// with SOL".
 const POOL_PROGRAM = 'SP12tWFxD9oJsVWNavTTBZvMbA6gkAmxtVgxdqvyvhY'
+const POOL = 'E6oqvrLKexQwFJyCnQ8ewx8xt9tQo7uezat24f5Qixqb'
 const MINT = '6K4xdfEk5rvySM496rxm4x8AgC9wVt7N4C7mFFpNAj5f'
 
 const DEPOSIT_SOL_VARIANTS = new Set([14, 24])
@@ -38,12 +36,13 @@ interface IndexerCursor {
   backfill_done: boolean
 }
 
-interface ReferralRow {
+interface ManagerFeeRow {
   sig: string
+  ixIndex: number
   slot: number
   ts: Date
-  referrer: string
-  referrerAta: string
+  manager: string
+  managerFeeAta: string
   depositor: string
   solLamports: bigint
   feeStacsol: bigint
@@ -73,8 +72,18 @@ function isDepositSolIx(ix: ParsedInstructionRpc): boolean {
 }
 
 async function loadCursor(): Promise<IndexerCursor> {
+  await getPool().query(
+    `CREATE TABLE IF NOT EXISTS manager_fee_index_state (
+       id INT PRIMARY KEY DEFAULT 1,
+       newest_sig TEXT,
+       oldest_sig TEXT,
+       backfill_done BOOLEAN NOT NULL DEFAULT FALSE,
+       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+     );
+     INSERT INTO manager_fee_index_state (id) VALUES (1) ON CONFLICT (id) DO NOTHING;`,
+  )
   const r = await getPool().query(
-    'SELECT newest_sig, oldest_sig, backfill_done FROM referral_index_state WHERE id = 1',
+    'SELECT newest_sig, oldest_sig, backfill_done FROM manager_fee_index_state WHERE id = 1',
   )
   const row = r.rows[0]
   return {
@@ -86,14 +95,14 @@ async function loadCursor(): Promise<IndexerCursor> {
 
 async function saveCursor(c: IndexerCursor): Promise<void> {
   await getPool().query(
-    `UPDATE referral_index_state
+    `UPDATE manager_fee_index_state
      SET newest_sig = $1, oldest_sig = $2, backfill_done = $3, updated_at = NOW()
      WHERE id = 1`,
     [c.newest_sig, c.oldest_sig, c.backfill_done],
   )
 }
 
-function extractCredits(sig: string, tx: ParsedTransactionRpc): ReferralRow[] {
+function extractCredits(sig: string, tx: ParsedTransactionRpc): ManagerFeeRow[] {
   if (tx.meta?.err) return []
   const candidates: ParsedInstructionRpc[] = []
   const top = tx.transaction.message.instructions
@@ -121,51 +130,42 @@ function extractCredits(sig: string, tx: ParsedTransactionRpc): ReferralRow[] {
 
   const slot = tx.slot
   const ts = new Date((tx.blockTime ?? Math.floor(Date.now() / 1000)) * 1000)
-  const out: ReferralRow[] = []
-  for (const ix of candidates) {
+  const out: ManagerFeeRow[] = []
+  for (let i = 0; i < candidates.length; i++) {
+    const ix = candidates[i]
     const accs = ix.accounts ?? []
     if (accs.length <= REFERRER_ACCOUNT_INDEX) continue
-    const referrerAta = accs[REFERRER_ACCOUNT_INDEX]
     const managerAta = accs[MANAGER_FEE_ACCOUNT_INDEX]
+    const referrerAta = accs[REFERRER_ACCOUNT_INDEX]
     const destAta = accs[DEST_USER_ATA_INDEX]
     const depositor = accs[DEPOSITOR_ACCOUNT_INDEX]
     const bytes = decodeIxData(ix.data)
     if (!bytes) continue
     const solLamports = readU64LE(bytes, 1)
-    // The pre/post token-balance delta on the referrer's ATA is normally
-    // a clean read of the kickback. BUT when the depositor sets themselves
-    // as their own referrer (self-referral, very common — every "organic"
-    // depositor who pre-set themselves does this), the referrer ATA *is*
-    // the destination ATA, so its delta = user_portion + manager_keep +
-    // referrer_fee = nearly the entire mint output. The result is a
-    // ~20–30× overstatement of "earned via referral" for self-referrers.
-    //
-    // The deposit fee is split 50/50 between manager and referrer, so the
-    // manager ATA's delta is the same magnitude as the actual referrer
-    // fee — and on a self-referral, the manager ATA is distinct from
-    // destAta and therefore not contaminated. We use it as the canonical
-    // signal whenever referrerAta collides with destAta.
-    const referrerDelta = balByAta.get(referrerAta) ?? 0n
+    // Same self-collision logic as referral-index: when the manager is
+    // also the depositor (manager self-mints) the destAta == managerAta
+    // and balByAta inflates the manager fee to ~full mint output. Use
+    // the referrer leg as canonical (50/50 split → equal magnitude).
     const managerDelta = balByAta.get(managerAta) ?? 0n
+    const referrerDelta = balByAta.get(referrerAta) ?? 0n
     let feeDelta: bigint
-    if (referrerAta && destAta && referrerAta === destAta && managerAta !== destAta) {
-      // self-referral path → use manager-leg as the canonical kickback
-      feeDelta = managerDelta
-    } else if (referrerAta && managerAta && referrerAta === managerAta) {
-      // depositor self-referred AND happens to be the manager — both legs
-      // collapse into one ATA delta which is 2× the actual kickback.
-      feeDelta = referrerDelta / 2n
-    } else {
-      // clean 3-party deposit → delta on referrer ATA = pure kickback
+    if (managerAta && destAta && managerAta === destAta && referrerAta !== destAta) {
+      // manager self-deposit → use referrer-leg as canonical fee signal
       feeDelta = referrerDelta
+    } else if (managerAta && referrerAta && managerAta === referrerAta) {
+      // collapsed legs → halve to recover one side's share
+      feeDelta = managerDelta / 2n
+    } else {
+      feeDelta = managerDelta
     }
     if (feeDelta <= 0n) continue
     out.push({
       sig,
+      ixIndex: i,
       slot,
       ts,
-      referrer: '',
-      referrerAta,
+      manager: '',
+      managerFeeAta: managerAta,
       depositor,
       solLamports,
       feeStacsol: feeDelta,
@@ -200,7 +200,7 @@ async function resolveAtaOwners(
 async function processBatch(
   endpoint: string,
   sigInfos: SignatureInfo[],
-): Promise<{ inserted: number; rows: ReferralRow[] }> {
+): Promise<{ inserted: number; rows: ManagerFeeRow[] }> {
   if (sigInfos.length === 0) return { inserted: 0, rows: [] }
   const out: { sig: string; tx: ParsedTransactionRpc | null }[] = []
   for (let i = 0; i < sigInfos.length; i += MAX_TX_RPC_CONCURRENCY) {
@@ -214,7 +214,7 @@ async function processBatch(
     )
     out.push(...results)
   }
-  const candidates: ReferralRow[] = []
+  const candidates: ManagerFeeRow[] = []
   for (const { sig, tx } of out) {
     if (!tx) continue
     candidates.push(...extractCredits(sig, tx))
@@ -222,24 +222,25 @@ async function processBatch(
   if (candidates.length === 0) return { inserted: 0, rows: [] }
   const owners = await resolveAtaOwners(
     endpoint,
-    candidates.map((r) => r.referrerAta),
+    candidates.map((r) => r.managerFeeAta),
   )
   const filled = candidates
-    .map((r) => ({ ...r, referrer: owners.get(r.referrerAta) ?? '' }))
-    .filter((r) => r.referrer !== '')
+    .map((r) => ({ ...r, manager: owners.get(r.managerFeeAta) ?? '' }))
+    .filter((r) => r.manager !== '')
   let inserted = 0
   for (const r of filled) {
     const result = await getPool().query(
-      `INSERT INTO referral_credits
-        (sig, slot, ts, referrer, referrer_ata, depositor, sol_lamports, fee_stacsol)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       ON CONFLICT (sig) DO NOTHING`,
+      `INSERT INTO manager_fee_credits
+        (sig, ix_index, slot, ts, manager, manager_fee_ata, depositor, sol_lamports, fee_stacsol)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       ON CONFLICT (sig, ix_index) DO NOTHING`,
       [
         r.sig,
+        r.ixIndex,
         r.slot,
         r.ts,
-        r.referrer,
-        r.referrerAta,
+        r.manager,
+        r.managerFeeAta,
         r.depositor,
         r.solLamports.toString(),
         r.feeStacsol.toString(),
@@ -321,7 +322,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       cursor: { newest_sig: newNewest, oldest_sig: newOldest, backfill_done: backfillDone },
     })
   } catch (e) {
-    console.error('referral-index error:', e)
+    console.error('manager-fee-index error:', e)
     res.status(500).json({ ok: false, error: (e as Error).message })
   }
 }

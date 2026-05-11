@@ -28,7 +28,7 @@ interface Metric {
 const METRICS: Metric[] = [
   {
     key: 'rate',
-    label: 'Redemption rate',
+    label: 'Redemption rate (NAV)',
     unit: 'SOL / stacSOL',
     hint: 'pool.total_lamports ÷ pool.pool_token_supply — what WithdrawSol actually pays out',
     color: '#ff3300',

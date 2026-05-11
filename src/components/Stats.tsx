@@ -59,7 +59,7 @@ export function Stats({ pool }: { pool: PoolState | null }) {
           sub="pool.pool_token_supply"
         />
         <Stat
-          label="Redemption rate"
+          label="Redemption rate (NAV)"
           value={rateStr}
           unit="SOL / stacSOL"
           sub="what WithdrawSol actually pays out"

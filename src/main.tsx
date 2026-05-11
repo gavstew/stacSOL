@@ -24,6 +24,9 @@ const Liquidity = lazy(() => import('./Liquidity.tsx'))
 const SingleSided = lazy(() => import('./SingleSided.tsx'))
 const Portfolio = lazy(() => import('./Portfolio.tsx'))
 const Faq = lazy(() => import('./Faq.tsx'))
+const Leaderboard = lazy(() => import('./Leaderboard.tsx'))
+const Baitscope = lazy(() => import('./Baitscope.tsx'))
+const Liqmonsta = lazy(() => import('./Liqmonsta.tsx'))
 
 // Derive the WebSocket endpoint from the HTTP RPC URL. @solana/web3.js does
 // this auto-derivation internally too, but doing it here means we can pin
@@ -67,6 +70,9 @@ const isSingleSided =
   path === '/singlesided' || path.startsWith('/singlesided/')
 const isPortfolio = path === '/portfolio' || path.startsWith('/portfolio/')
 const isFaq = path === '/faq' || path.startsWith('/faq/')
+const isLeaderboard = path === '/leaderboard' || path.startsWith('/leaderboard/')
+const isBaitscope = path === '/baitscope' || path.startsWith('/baitscope/')
+const isLiqmonsta = path === '/liqmonsta' || path.startsWith('/liqmonsta/')
 
 function RouteFallback() {
   return (
@@ -97,6 +103,18 @@ createRoot(document.getElementById('root')!).render(
       ) : isPortfolio ? (
         <Providers>
           <Portfolio />
+        </Providers>
+      ) : isLeaderboard ? (
+        <Providers>
+          <Leaderboard />
+        </Providers>
+      ) : isBaitscope ? (
+        // Baitscope reads /api/flywheel-feed (no wallet needed) so it
+        // doesn't drag the wallet-adapter chunk into the route.
+        <Baitscope />
+      ) : isLiqmonsta ? (
+        <Providers>
+          <Liqmonsta />
         </Providers>
       ) : (
         <Providers>

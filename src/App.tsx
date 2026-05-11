@@ -16,6 +16,7 @@ import { WalletCard } from './components/WalletCard'
 import { usePool } from './hooks/usePool'
 import { usePosition } from './hooks/usePosition'
 import { useLpExposure } from './hooks/useLpExposure'
+import { useMyHolderRow } from './hooks/useMyHolderRow'
 
 export default function App() {
   const { pool, error, refresh } = usePool()
@@ -32,6 +33,11 @@ export default function App() {
       ? Number(pool.poolTotalLamports) / Number(pool.poolTokenSupplyAccounting)
       : 1
   const lpExposure = useLpExposure(currentRate)
+  // Authoritative cost basis from the indexer — same source as the
+  // holders leaderboard, so the Position card's P&L now matches the
+  // leaderboard P&L exactly. Falls through to fetchPosition()'s ATA-walk
+  // numbers only if the indexer hasn't seen this wallet yet.
+  const { row: holderRow } = useMyHolderRow()
 
   const append = useCallback((msg: string) => {
     const ts = new Date().toLocaleTimeString()
@@ -112,6 +118,21 @@ export default function App() {
           portfolio: positions + fees →
         </a>
         <a
+          href="/liqmonsta"
+          className="inline-flex items-center gap-2 px-3 py-2 rounded border border-[var(--color-hot)] bg-[rgb(255_34_0_/_0.12)] text-[10px] font-black uppercase tracking-[3px] text-[var(--color-hot)] no-underline hover:bg-[rgb(255_34_0_/_0.2)] transition"
+          style={{ boxShadow: '0 0 16px rgba(255,34,0,0.25)' }}
+        >
+          <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-hot)] [box-shadow:0_0_6px_var(--color-hot)]" />
+          liqmonsta: smash your LPs →
+        </a>
+        <a
+          href="/leaderboard"
+          className="inline-flex items-center gap-2 px-3 py-2 rounded border border-[rgb(255_204_0_/_0.4)] bg-[rgb(255_204_0_/_0.06)] text-[10px] font-black uppercase tracking-[3px] text-[var(--color-warn)] no-underline hover:bg-[rgb(255_204_0_/_0.12)] transition"
+        >
+          <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-warn)]" />
+          leaderboard: holders P&amp;L →
+        </a>
+        <a
           href="/faq"
           className="inline-flex items-center gap-2 px-3 py-2 rounded border border-[rgb(34_238_136_/_0.4)] bg-[rgb(34_238_136_/_0.06)] text-[10px] font-black uppercase tracking-[3px] text-[var(--color-green)] no-underline hover:bg-[rgb(34_238_136_/_0.12)] transition"
         >
@@ -151,6 +172,12 @@ export default function App() {
           error={posError}
           lastBalanceTickAt={lastBalanceTickAt}
           lpExposure={lpExposure}
+          // Without holderRow, Position falls through to the on-chain tx walk
+          // for cost basis, which over-counts Jupiter zap-in fees + Jito tips
+          // + compute-budget as "SOL in". That makes the Position card's P&L
+          // diverge from the leaderboard P&L by the bundle overhead. Passing
+          // it keeps both surfaces showing the same indexed grossSolIn.
+          holderRow={holderRow}
         />
       </section>
 

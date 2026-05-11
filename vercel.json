@@ -7,6 +7,14 @@
     {
       "path": "/api/referral-index",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/manager-fee-index",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/ingest-pool-events",
+      "schedule": "*/5 * * * *"
     }
   ],
   "rewrites": [
@@ -20,6 +28,12 @@
     { "source": "/portfolio", "destination": "/index.html" },
     { "source": "/portfolio/(.*)", "destination": "/index.html" },
     { "source": "/faq", "destination": "/index.html" },
-    { "source": "/faq/(.*)", "destination": "/index.html" }
+    { "source": "/faq/(.*)", "destination": "/index.html" },
+    { "source": "/leaderboard", "destination": "/index.html" },
+    { "source": "/leaderboard/(.*)", "destination": "/index.html" },
+    { "source": "/baitscope", "destination": "/index.html" },
+    { "source": "/baitscope/(.*)", "destination": "/index.html" },
+    { "source": "/liqmonsta", "destination": "/index.html" },
+    { "source": "/liqmonsta/(.*)", "destination": "/index.html" }
   ]
 }

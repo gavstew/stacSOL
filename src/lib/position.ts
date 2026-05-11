@@ -8,6 +8,24 @@ import { deriveAta } from './ix'
  * balances and the ATA's pre/post token balances, which `getParsedTransactions`
  * surfaces directly.
  */
+/**
+ * One mint deposit event observed against the user's ATA. We recover
+ * `solIn` and `stacOut` from balance deltas (so this row is true cost
+ * basis, not an estimate). `impliedMintNav = solIn / stacOut` is the
+ * post-fee NAV the user effectively paid; `costPerStac` is the per-stac
+ * cost in SOL — same number, surfaced under both labels because the
+ * Position card uses one for the table and one for the break-even
+ * column.
+ */
+export interface MintTranche {
+  ts: number             // ms since epoch
+  sig: string
+  solIn: bigint          // lamports paid (signed positive)
+  stacOut: bigint        // stacSOL received (atomic)
+  impliedMintNav: number // SOL per stacSOL (= solIn / stacOut)
+  costPerStac: number    // alias of impliedMintNav (in SOL/stacSOL)
+}
+
 export interface Position {
   ata: PublicKey
   /** Live balance from the ATA. */
@@ -24,6 +42,8 @@ export interface Position {
   mintCount: number
   /** Number of burn events found. */
   burnCount: number
+  /** Per-mint cost-basis records, oldest first. */
+  mintTranches: MintTranche[]
 }
 
 /** Fetch the wallet's stacSOL position summary. */
@@ -54,10 +74,13 @@ export async function fetchPosition(conn: Connection, wallet: PublicKey): Promis
       totalSolIn: 0n, totalTokensIn: 0n,
       totalTokensOut: 0n, totalSolOut: 0n,
       mintCount: 0, burnCount: 0,
+      mintTranches: [],
     }
   }
 
-  // getParsedTransactions caps at ~250 sigs per call — chunk it.
+  // getParsedTransactions caps at ~250 sigs per call — chunk it. We keep
+  // the original signature list aligned to txs so we can attach the sig
+  // back onto each mint-tranche row below.
   const sigList = sigs.map((s) => s.signature)
   const txs: Awaited<ReturnType<typeof conn.getParsedTransactions>> = []
   const CHUNK = 100
@@ -75,8 +98,10 @@ export async function fetchPosition(conn: Connection, wallet: PublicKey): Promis
   let totalSolOut = 0n
   let mintCount = 0
   let burnCount = 0
+  const mintTranches: MintTranche[] = []
 
-  for (const tx of txs) {
+  for (let txIdx = 0; txIdx < txs.length; txIdx++) {
+    const tx = txs[txIdx]
     if (!tx || !tx.meta || tx.meta.err) continue
 
     // Wallet's SOL delta this tx (signed, includes paid tx fee).
@@ -103,9 +128,21 @@ export async function fetchPosition(conn: Connection, wallet: PublicKey): Promis
 
     if (tokenDelta > 0n && solDelta < 0n) {
       // Mint: SOL went out, stacSOL came in.
-      totalSolIn += -solDelta
+      const solIn = -solDelta
+      totalSolIn += solIn
       totalTokensIn += tokenDelta
       mintCount++
+      const sigInfo = sigs[txIdx]
+      const tsSec = sigInfo?.blockTime ?? tx.blockTime ?? null
+      const impliedMintNav = Number(solIn) / Number(tokenDelta)
+      mintTranches.push({
+        ts: tsSec != null ? tsSec * 1000 : Date.now(),
+        sig: sigInfo?.signature ?? '',
+        solIn,
+        stacOut: tokenDelta,
+        impliedMintNav,
+        costPerStac: impliedMintNav,
+      })
     } else if (tokenDelta < 0n && solDelta > 0n) {
       // Burn: stacSOL went out, SOL came in.
       totalTokensOut += -tokenDelta
@@ -116,7 +153,21 @@ export async function fetchPosition(conn: Connection, wallet: PublicKey): Promis
     // we don't know what the counterparty paid for them.
   }
 
-  return { ata, balance, totalSolIn, totalTokensIn, totalTokensOut, totalSolOut, mintCount, burnCount }
+  // Sort tranches oldest → newest so the Position card renders mints in
+  // the order they happened. `getSignaturesForAddress` returns newest-first.
+  mintTranches.sort((a, b) => a.ts - b.ts)
+
+  return {
+    ata,
+    balance,
+    totalSolIn,
+    totalTokensIn,
+    totalTokensOut,
+    totalSolOut,
+    mintCount,
+    burnCount,
+    mintTranches,
+  }
 }
 
 /**

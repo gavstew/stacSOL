@@ -45,11 +45,14 @@ import { MINT, TOKEN_2022 } from './constants'
 const STORAGE_KEY = 'stacc-ui:referrer'
 const URL_PARAM = 'ref'
 
-/** Marketing wallet — collects the referral fee when no `?ref=` link is
- *  in play. Treated as the SOURCE OF TRUTH for "default referrer", not as
- *  a fallback constant scattered through the UI. Update here when rotating. */
+/** Default referrer — collects the 50% referral share of the 6.9% deposit
+ *  fee on every mint without a `?ref=` link. Currently routed to the pool
+ *  manager wallet so the referral revenue flows back into the bait-loop's
+ *  operating budget (the manager wallet is what funds bait + collects
+ *  recovery via WithdrawSol). Treated as the SOURCE OF TRUTH for "default
+ *  referrer" — update here when rotating. */
 export const MARKETING_REFERRER = new PublicKey(
-  'Bq4KMaVvzemx4tyfoyhZ7Kooo494GEv1xq9MLgRkfF6j',
+  'WzMaL78srutrF6CsxEkWuhMaDF5HZA6jNRaEPengqpb',
 )
 
 /** Validate a base58 string as a Solana PublicKey. We deliberately accept

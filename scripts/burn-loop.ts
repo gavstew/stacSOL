@@ -54,7 +54,11 @@ const STAKE_PROGRAM = new PublicKey('Stake11111111111111111111111111111111111111
 const DECIMALS = 9
 const MIN_CLAIM_TOKENS = 0.001
 const MIN_CLAIM = BigInt(Math.floor(MIN_CLAIM_TOKENS * 10 ** DECIMALS))
-const TICK_MS = 5 * 60 * 1000
+// Default 5 min — set BURN_LOOP_TICK_MS to override (e.g. 30000 for 30s).
+// At fast cadences burn-loop fires harvest + recovery much more often,
+// which keeps the bait wallet topped up via WithdrawSol but uses more
+// RPC + sends more on-chain txs.
+const TICK_MS = Number(process.env.BURN_LOOP_TICK_MS ?? 5 * 60 * 1000)
 const CHUNK = 20 // source accounts per WithdrawWithheld tx
 
 const RPC_URL = process.env.RPC_URL
@@ -62,6 +66,96 @@ if (!RPC_URL) {
   throw new Error(
     'set RPC_URL env var (any Solana mainnet RPC with reasonable rate limits)',
   )
+}
+
+// /api/manager-state — base URL + shared secret for the bait-cost counter.
+// If unset, the recovery step silently no-ops (current burn-loop behavior).
+const MANAGER_STATE_URL =
+  process.env.MANAGER_STATE_URL ?? 'https://stacsol.app/api/manager-state'
+const MANAGER_STATE_SECRET = process.env.MANAGER_STATE_SECRET
+
+interface ManagerState {
+  outstandingBaitCostLamports: string
+  lifetimeBaitCostLamports: string
+  lifetimeBaitRecoveredLamports: string
+  lifetimeBaitCycles: number
+  lifetimeRecoveryCycles: number
+}
+
+async function fetchManagerState(): Promise<ManagerState | null> {
+  try {
+    const r = await fetch(MANAGER_STATE_URL, { signal: AbortSignal.timeout(10_000) })
+    if (!r.ok) {
+      log(`manager-state GET ${r.status}`)
+      return null
+    }
+    return (await r.json()) as ManagerState
+  } catch (e) {
+    log(`manager-state GET error: ${(e as Error).message}`)
+    return null
+  }
+}
+
+async function reportRecovery(lamports: bigint): Promise<void> {
+  if (!MANAGER_STATE_SECRET) return
+  try {
+    const r = await fetch(MANAGER_STATE_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-manager-secret': MANAGER_STATE_SECRET,
+      },
+      body: JSON.stringify({ kind: 'recover', lamports: lamports.toString() }),
+      signal: AbortSignal.timeout(10_000),
+    })
+    if (!r.ok) {
+      const txt = await r.text().catch(() => '')
+      log(`manager-state POST recover ${r.status}: ${txt.slice(0, 200)}`)
+    }
+  } catch (e) {
+    log(`manager-state POST recover error: ${(e as Error).message}`)
+  }
+}
+
+interface BurnReport {
+  harvestedAtom: bigint
+  recoveredAtom: bigint
+  burnedAtom: bigint
+  navBefore?: number
+  navAfter?: number
+  candidateCount: number
+}
+
+async function reportBurnTick(rep: BurnReport): Promise<void> {
+  if (!MANAGER_STATE_SECRET) return
+  // Skip the post when nothing material happened — avoids spamming rows
+  // for idle ticks.
+  if (rep.harvestedAtom === 0n && rep.burnedAtom === 0n && rep.recoveredAtom === 0n) return
+  try {
+    const r = await fetch(MANAGER_STATE_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-manager-secret': MANAGER_STATE_SECRET,
+      },
+      body: JSON.stringify({
+        kind: 'burn',
+        harvestedAtom: rep.harvestedAtom.toString(),
+        recoveredAtom: rep.recoveredAtom.toString(),
+        burnedAtom: rep.burnedAtom.toString(),
+        navBefore: rep.navBefore ?? null,
+        navAfter: rep.navAfter ?? null,
+        candidateCount: rep.candidateCount,
+      }),
+      signal: AbortSignal.timeout(10_000),
+    })
+    if (!r.ok) {
+      const txt = await r.text().catch(() => '')
+      log(`manager-state POST burn ${r.status}: ${txt.slice(0, 200)}`)
+    }
+  } catch (e) {
+    log(`manager-state POST burn error: ${(e as Error).message}`)
+  }
 }
 
 // Two ways to provide the manager keypair, in priority order:
@@ -307,6 +401,41 @@ function ixCleanupRemovedValidatorEntries(validatorList: PublicKey) {
   })
 }
 
+// SPL stake pool — WithdrawSol (variant 16). Data: [16, pool_tokens: u64].
+// Used by the recovery step to convert swept withholding stacSOL back into
+// SOL credited to the manager wallet — paying back the outstanding bait cost
+// before the remaining ATA balance is burned for NAV.
+function ixWithdrawSol(
+  burner: PublicKey,
+  poolTokens: bigint,
+  reserveStake: PublicKey,
+  managerFeeAccount: PublicKey,
+) {
+  const [withdrawAuth] = PublicKey.findProgramAddressSync(
+    [POOL.toBytes(), new TextEncoder().encode('withdraw')],
+    POOL_PROGRAM,
+  )
+  const burnerAta = deriveAta(burner)
+  return new TransactionInstruction({
+    programId: POOL_PROGRAM,
+    keys: [
+      { pubkey: POOL, isSigner: false, isWritable: true },
+      { pubkey: withdrawAuth, isSigner: false, isWritable: false },
+      { pubkey: burner, isSigner: true, isWritable: false }, // user_transfer_authority
+      { pubkey: burnerAta, isSigner: false, isWritable: true },
+      { pubkey: reserveStake, isSigner: false, isWritable: true },
+      { pubkey: burner, isSigner: false, isWritable: true }, // recipient (lamports)
+      { pubkey: managerFeeAccount, isSigner: false, isWritable: true },
+      { pubkey: MINT, isSigner: false, isWritable: true },
+      { pubkey: SYSVAR_CLOCK, isSigner: false, isWritable: false },
+      { pubkey: SYSVAR_STAKE_HISTORY, isSigner: false, isWritable: false },
+      { pubkey: STAKE_PROGRAM, isSigner: false, isWritable: false },
+      { pubkey: TOKEN_2022, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.concat([Buffer.from([16]), u64le(poolTokens)]),
+  })
+}
+
 // Read pool's validator_list, reserve_stake, manager_fee_account from chain.
 async function fetchPoolRefs() {
   const acc = await withRetry('fetchPoolRefs', () => conn.getAccountInfo(POOL, 'confirmed'))
@@ -409,9 +538,27 @@ async function tick() {
   const ata = deriveAta(authority.publicKey)
   log(`tick — authority ${authority.publicKey.toBase58()} ata ${ata.toBase58()}`)
 
+  // Telemetry — populated through the tick + posted at the end so the
+  // dashboard can attribute NAV growth to source.
+  let harvestedAtom = 0n
+  let recoveredAtom = 0n
+  let burnedAtom = 0n
+  let candidateCount = 0
+  let navBefore: number | undefined
+  let navAfter: number | undefined
+  try {
+    const r0 = await fetchPoolRefs()
+    if (r0.poolTokenSupply > 0n)
+      navBefore = Number(r0.poolTotalLamports) / Number(r0.poolTokenSupply)
+  } catch {
+    /* non-fatal */
+  }
+
   // 1. Discover accounts with withheld ≥ MIN_CLAIM.
   const candidates = await findAccountsWithWithheld()
   const totalWithheld = candidates.reduce((s, a) => s + a.withheld, 0n)
+  candidateCount = candidates.length
+  harvestedAtom = totalWithheld
   log(
     `found ${candidates.length} candidate account(s), total withheld = ${fmtTok(totalWithheld)} stacSOL`,
   )
@@ -439,18 +586,69 @@ async function tick() {
     }
   }
 
-  // 3. Burn whatever sits in our ATA right now.
+  // 3a. Recovery step: if bait-loop has logged outstanding cost, withdraw
+  //     enough stacSOL via WithdrawSol to recoup it before the burn. Manager
+  //     receives SOL back into their wallet. Cost counter decrements by the
+  //     SOL actually received. Skips if cost == 0 or counter API is down.
+  const balanceAfterSweep = await readBalance(ata)
+  log(`ata balance after harvest: ${fmtTok(balanceAfterSweep)} stacSOL`)
+  let burnedAny = false
+
+  if (balanceAfterSweep > 0n) {
+    const state = await fetchManagerState()
+    const outstandingLamports = state ? BigInt(state.outstandingBaitCostLamports) : 0n
+    if (outstandingLamports > 0n) {
+      try {
+        const refs = await fetchPoolRefs()
+        // stacSOL needed to redeem outstandingLamports of SOL at current NAV:
+        // X * total_lamports / pool_token_supply = outstandingLamports
+        // → X = outstandingLamports * pool_token_supply / total_lamports
+        const totalLam = refs.poolTotalLamports
+        const supply = refs.poolTokenSupply
+        if (totalLam > 0n && supply > 0n) {
+          const stacNeeded = (outstandingLamports * supply) / totalLam
+          const stacToBurn = stacNeeded > balanceAfterSweep ? balanceAfterSweep : stacNeeded
+          if (stacToBurn > 0n) {
+            // Project lamports we'll actually receive for stacToBurn.
+            const projectedLamports = (stacToBurn * totalLam) / supply
+            log(
+              `recovery: outstanding=${(Number(outstandingLamports) / 1e9).toFixed(6)} SOL, ` +
+                `withdrawing ${fmtTok(stacToBurn)} stacSOL (~${(Number(projectedLamports) / 1e9).toFixed(6)} SOL)`,
+            )
+            await sendIxs(
+              [ixWithdrawSol(authority.publicKey, stacToBurn, refs.reserveStake, refs.managerFeeAccount)],
+              `recovery-withdraw ${fmtTok(stacToBurn)} stacSOL`,
+            )
+            // After WithdrawSol the pool's accounting is one step behind too —
+            // fold it into the update-pool step below by flagging that something
+            // changed the supply.
+            burnedAny = true
+            recoveredAtom = stacToBurn
+            await reportRecovery(projectedLamports)
+          }
+        }
+      } catch (e) {
+        log(`recovery error: ${(e as Error).message}`)
+      }
+    }
+  }
+
+  // 3b. Burn whatever stacSOL is still in our ATA after recovery. That's the
+  //     excess withholding that exceeds the bait debt — pure NAV burn.
   const balance = await readBalance(ata)
-  log(`ata balance after harvest: ${fmtTok(balance)} stacSOL`)
-  let burned = false
   if (balance > 0n) {
+    log(`ata balance after recovery: ${fmtTok(balance)} stacSOL — burning excess`)
     try {
       await sendIxs([ixBurnChecked(ata, balance)], `burn ${fmtTok(balance)} stacSOL`)
-      burned = true
+      burnedAny = true
+      burnedAtom = balance
     } catch (e) {
       log(`burn error: ${(e as Error).message}`)
     }
+  } else if (burnedAny) {
+    log(`ata empty after recovery — no excess to burn this tick`)
   }
+  const burned = burnedAny
 
   // 4. Sync the pool's accounting so the rate gain materializes for redeemers.
   //    Skip if we didn't burn anything this tick (no drift to clear).
@@ -467,11 +665,24 @@ async function tick() {
       )
       const refsAfter = await fetchPoolRefs()
       const rate = Number(refsAfter.poolTotalLamports) / Number(refsAfter.poolTokenSupply)
+      navAfter = rate
       log(`pool rate now: ${rate.toFixed(6)} SOL/stacSOL`)
     } catch (e) {
       log(`update-pool error: ${(e as Error).message}`)
     }
   }
+
+  // Post tick summary so the dashboard can chart burn velocity + attribute
+  // NAV growth. Idle ticks (nothing harvested/recovered/burned) get skipped
+  // inside reportBurnTick.
+  await reportBurnTick({
+    harvestedAtom,
+    recoveredAtom,
+    burnedAtom,
+    navBefore,
+    navAfter,
+    candidateCount,
+  })
 }
 
 // ----------------------------------------------------------- main loop

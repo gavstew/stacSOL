@@ -25,12 +25,14 @@
     "@solendprotocol/solend-sdk": "^0.14.27",
     "@vercel/og": "^0.11.1",
     "bn.js": "^5.2.3",
+    "bs58": "^6.0.0",
     "canvas-confetti": "^1.9.4",
     "decimal.js": "^10.6.0",
     "pg": "^8.20.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
-    "recharts": "^3.8.1"
+    "recharts": "^3.8.1",
+    "tweetnacl": "^1.0.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
