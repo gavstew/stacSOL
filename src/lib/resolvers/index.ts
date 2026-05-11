@@ -21,6 +21,7 @@ export type AmmType =
   | 'raydium-clmm'
   | 'orca-whirlpool'
   | 'meteora-damm'
+  | 'pump-amm'
 
 export type WireStatus = 'live' | 'next' | 'wiring'
 
@@ -131,12 +132,13 @@ export interface AmmResolver {
  *   4. Done — Liqmonsta picks it up automatically
  */
 export async function loadResolvers(): Promise<AmmResolver[]> {
-  const [dlmm, cpmm, clmm, whirl, damm] = await Promise.all([
+  const [dlmm, cpmm, clmm, whirl, damm, pump] = await Promise.all([
     import('./meteora-dlmm').then((m) => m.default),
     import('./raydium-cpmm').then((m) => m.default),
     import('./raydium-clmm').then((m) => m.default),
     import('./orca-whirlpool').then((m) => m.default),
     import('./meteora-damm').then((m) => m.default),
+    import('./pump-amm').then((m) => m.default),
   ])
-  return [dlmm, cpmm, clmm, whirl, damm]
+  return [dlmm, cpmm, clmm, whirl, damm, pump]
 }

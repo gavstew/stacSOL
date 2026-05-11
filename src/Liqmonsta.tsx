@@ -529,6 +529,8 @@ function ammBadgeColor(amm: AmmType) {
       return 'var(--color-hot)'
     case 'meteora-damm':
       return 'var(--color-dim)'
+    case 'pump-amm':
+      return 'var(--color-fg)'
     default:
       return 'var(--color-fg)'
   }
