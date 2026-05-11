@@ -1,0 +1,34 @@
+{
+  "name": "stacc on ketamine by mistake",
+  "symbol": "KMINE",
+  "description": "27-minute spoken-word transmission. recorded once, by mistake, on ketamine. now a hatchfun token — every trade burns 6.9% into the bonding curve, which means it's the audio that earns. 70% liquidity locked into a Meteora DLMM pool, fees stream to whoever holds.",
+  "image": "https://stacsol.app/launches/stacc-on-ketamine/cover.png",
+  "animation_url": "https://stacsol.app/launches/stacc-on-ketamine/audio.mp4",
+  "external_url": "https://stacsol.app",
+  "attributes": [
+    { "trait_type": "format", "value": "spoken word" },
+    { "trait_type": "duration", "value": "27:24" },
+    { "trait_type": "venue", "value": "hatchfun · meteora dlmm" }
+  ],
+  "properties": {
+    "files": [
+      {
+        "uri": "https://stacsol.app/launches/stacc-on-ketamine/cover.png",
+        "type": "image/png"
+      },
+      {
+        "uri": "https://stacsol.app/launches/stacc-on-ketamine/audio.mp4",
+        "type": "video/mp4"
+      },
+      {
+        "uri": "https://stacsol.app/launches/stacc-on-ketamine/audio.mp3",
+        "type": "audio/mpeg"
+      }
+    ],
+    "category": "audio"
+  },
+  "extensions": {
+    "twitter": "https://x.com/staccoverflow",
+    "website": "https://stacsol.app"
+  }
+}

@@ -30,6 +30,7 @@
     "bs58": "^6.0.0",
     "canvas-confetti": "^1.9.4",
     "decimal.js": "^10.6.0",
+    "hatch-sdk": "github:hatchfun/hatch-sdk#1163a45c74a964397f7be75a055dd1071b2eab5c",
     "pg": "^8.20.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
