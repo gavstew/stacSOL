@@ -12,6 +12,7 @@
 // pending" until those are deployed.
 
 import { NATIVE_MINT, TOKEN_PROGRAM_ID } from '@solana/spl-token'
+import { findTarget, openOnTarget } from './targets'
 import type {
   AmmResolver,
   CloseResult,
@@ -39,7 +40,7 @@ const resolver: AmmResolver = {
     label: 'Meteora DAMM',
     scan: 'live',
     close: 'live',
-    open: 'wiring',
+    open: 'live',
   },
 
   async scan(connection, wallet) {
@@ -127,12 +128,38 @@ const resolver: AmmResolver = {
     return out
   },
 
-  async buildCloseTxs(_connection, _wallet, _pos): Promise<CloseResult> {
-    throw new Error('meteora damm close — SDK wiring in progress')
+  async buildCloseTxs(connection, wallet, pos): Promise<CloseResult> {
+    if (pos.state === 'already-stacsol') {
+      throw new Error('position is already stacSOL — nothing to migrate')
+    }
+    const r = pos.raw as DammRaw
+    // Lazy-load the Meteora DAMM SDK so it doesn't bloat the initial bundle.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sdk = (await import('@meteora-ag/dynamic-amm-sdk').catch(() => null)) as any
+    if (!sdk) throw new Error('meteora dynamic-amm SDK not loaded')
+    const AmmImpl = sdk.default ?? sdk
+    if (!AmmImpl?.create) throw new Error('meteora SDK shape unexpected — no AmmImpl.create')
+    const { PublicKey } = await import('@solana/web3.js')
+
+    const pool = await AmmImpl.create(connection, new PublicKey(r.poolId))
+    // removeLiquidity(owner, lpAtom, slippage) — slippage is BPS (0 = no min)
+    const tx = await pool.removeLiquidity(wallet, r.lpAtom, 0)
+    return {
+      txs: Array.isArray(tx) ? tx : [tx],
+      estSolAtom: pos.solAtom,
+      estOtherAtom: pos.otherAtom,
+    }
   },
 
-  async buildOpenTxs(_connection, _wallet, _pos, _stacAtomEstimate): Promise<OpenResult> {
-    throw new Error('no curated stacSOL DAMM target pool — auto-init pending')
+  async buildOpenTxs(connection, wallet, pos, stacAtomEstimate): Promise<OpenResult> {
+    // No curated stacSOL DAMM target today — route to the cross-AMM router.
+    const target = findTarget(pos.otherMint)
+    if (!target) {
+      throw new Error(
+        `no curated stacSOL/${pos.otherSymbol} target on any AMM — auto-init pending`,
+      )
+    }
+    return await openOnTarget(connection, wallet, target, stacAtomEstimate, pos.otherAtom)
   },
 }
 

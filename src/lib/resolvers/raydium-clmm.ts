@@ -18,6 +18,7 @@
 import { NATIVE_MINT } from '@solana/spl-token'
 import BN from 'bn.js'
 import { HELIUS_SENDER_TIP_LAMPORTS, pickHeliusTipAccount } from '../zap'
+import { findTarget, openOnTarget } from './targets'
 import type {
   AmmResolver,
   CloseResult,
@@ -56,7 +57,7 @@ const resolver: AmmResolver = {
     label: 'Raydium CLMM',
     scan: 'live',
     close: 'live',
-    open: 'wiring',
+    open: 'live',
   },
 
   async scan(connection, wallet) {
@@ -212,16 +213,21 @@ const resolver: AmmResolver = {
   },
 
   async buildOpenTxs(
-    _connection: import('@solana/web3.js').Connection,
-    _wallet: import('@solana/web3.js').PublicKey,
-    _pos: RawPosition,
-    _stacAtomEstimate: bigint,
+    connection: import('@solana/web3.js').Connection,
+    wallet: import('@solana/web3.js').PublicKey,
+    pos: RawPosition,
+    stacAtomEstimate: bigint,
   ): Promise<OpenResult> {
-    // Reopening on a stacSOL/X CLMM requires a curated target pool. None
-    // are deployed today; init-pool-via-ix is the next add.
-    throw new Error(
-      'no curated stacSOL CLMM target pool — auto-init pending',
-    )
+    // No curated stacSOL CLMM target today. Route to the cross-AMM target
+    // router instead — recovered tokenB lands on DLMM/CPMM where we have
+    // curated stacSOL/X pools.
+    const target = findTarget(pos.otherMint)
+    if (!target) {
+      throw new Error(
+        `no curated stacSOL/${pos.otherSymbol} target on any AMM — auto-init pending`,
+      )
+    }
+    return await openOnTarget(connection, wallet, target, stacAtomEstimate, pos.otherAtom)
   },
 }
 
