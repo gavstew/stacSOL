@@ -35,6 +35,15 @@ export interface ResolverMeta {
   open: WireStatus
 }
 
+/** State a discovered position is in relative to liqmonsta's smash flow. */
+export type PositionState =
+  /** SOL-paired AND a curated stacSOL/X target pool exists on this AMM — smashable today. */
+  | 'migratable'
+  /** Already a stacSOL position — nothing to migrate, but surfaced for visibility. */
+  | 'already-stacsol'
+  /** SOL-paired but no curated target pool yet — visible, queued for pool-init. */
+  | 'pending-target'
+
 /** Position found in the wild. AMM-agnostic shape consumed by the page. */
 export interface RawPosition {
   amm: AmmType
@@ -42,11 +51,14 @@ export interface RawPosition {
   positionId: string
   /** Source pool address (so we can show it on solscan). */
   poolAddress: string
-  /** Human label like "SOL / USDC". */
+  /** Human label like "SOL / USDC" or "stacSOL / USDC". */
   poolLabel: string
-  /** Amount of SOL inside this position (lamports). */
+  /** SOL inside this position (lamports). Zero for stacSOL-paired positions where
+   *  neither side is wSOL. */
   solAtom: bigint
-  /** Counterparty mint (the side that isn't SOL). */
+  /** stacSOL inside this position (atoms). Non-zero for already-stacsol positions. */
+  stacAtom: bigint
+  /** Counterparty mint — the side that isn't SOL or stacSOL. */
   otherMint: string
   /** UI symbol for the counterparty (best-effort; falls back to "?"). */
   otherSymbol: string
@@ -56,8 +68,8 @@ export interface RawPosition {
   otherAtom: bigint
   /** For range-based positions (DLMM bins, CLMM ticks): the position range. */
   range?: { lower: number; upper: number }
-  /** Whether the target stacSOL/X pool exists today on this AMM. */
-  hasTarget: boolean
+  /** State relative to liqmonsta's smash flow. */
+  state: PositionState
   /** Free-form AMM-specific data the close/open builders need. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   raw: any

@@ -292,6 +292,23 @@ export function Position({
                   ? 'computing…'
                   : 'no cost basis'}
               </div>
+              {/*
+                Referral / manager-fee attribution. Mirrors the leaderboard's
+                "of which X came free" beat. The earned value is ALREADY in the
+                P&L number above (it's in the wallet balance × NAV), but
+                surfacing it as a separate line answers the "where did my
+                referral earnings show up?" question without double-counting.
+              */}
+              {holderRow != null &&
+                holderRow.earnedSol != null &&
+                holderRow.earnedSol > 0 && (
+                  <div className="text-[11px] text-[var(--color-ember)] mt-0.5">
+                    of which free: +{fmtSolNum(holderRow.earnedSol)} SOL{' '}
+                    <span className="text-[var(--color-dim)] normal-case">
+                      (referral / manager-fee credits — already counted above)
+                    </span>
+                  </div>
+                )}
             </>
           )}
         </Cell>

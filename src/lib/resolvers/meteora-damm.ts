@@ -105,11 +105,12 @@ const resolver: AmmResolver = {
           poolLabel: `SOL / ${otherSymbol}`,
           // accurate atom estimates would need pool reserves; surface 0 for v1
           solAtom: 0n,
+          stacAtom: 0n,
           otherMint,
           otherSymbol,
           otherDecimals: solIsA ? decB : decA,
           otherAtom: 0n,
-          hasTarget: false,
+          state: 'pending-target',
           raw: {
             poolId: p.pool_address ?? p.address ?? lpMint,
             lpMint,

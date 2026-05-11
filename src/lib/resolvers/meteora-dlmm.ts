@@ -39,11 +39,11 @@ interface DlmmRaw {
   srcBinStep: number
   /** Whether SOL is the X side of the source pool. */
   solIsX: boolean
-  /** Mirrored bin range on the target stacSOL pool. */
+  /** Mirrored bin range on the target stacSOL pool (0 when no target). */
   targetLower: number
   targetUpper: number
-  /** Target pool reference (curated stacSOL/X). */
-  targetPool: MeteoraPool
+  /** Target pool reference (curated stacSOL/X). Null for non-migratable positions. */
+  targetPool: MeteoraPool | null
   /** Source position's bin range. */
   lowerBinId: number
   upperBinId: number
@@ -124,11 +124,31 @@ const resolver: AmmResolver = {
         const yMint = lbPair.tokenYMint.toBase58()
         const solIsX = xMint === wsol
         const solIsY = yMint === wsol
-        if (!solIsX && !solIsY) continue
-        const otherMint = solIsX ? yMint : xMint
-        if (otherMint === STACSOL_MINT) continue
+        const stacIsX = xMint === STACSOL_MINT
+        const stacIsY = yMint === STACSOL_MINT
+        // Surface SOL-paired AND stacSOL-paired positions. Other pairs (no
+        // SOL or stacSOL involvement) aren't relevant to liqmonsta — skip.
+        if (!solIsX && !solIsY && !stacIsX && !stacIsY) continue
 
-        const target = targetByOther.get(otherMint)
+        // Determine the "other" mint relative to the migration:
+        //   - SOL-paired: other = non-SOL side
+        //   - stacSOL-paired (no SOL): other = non-stacSOL side
+        //   - WSOL/stacSOL pool: other = stacSOL itself (positions on the
+        //     primary stacSOL pool are valid "already-stacsol" entries)
+        const isWsolStac = (solIsX && stacIsY) || (solIsY && stacIsX)
+        const otherMint = isWsolStac
+          ? STACSOL_MINT
+          : solIsX
+          ? yMint
+          : solIsY
+          ? xMint
+          : stacIsX
+          ? yMint
+          : xMint
+
+        const target = solIsX || solIsY ? targetByOther.get(otherMint) : null
+        const hasStac = stacIsX || stacIsY
+        const hasSol = solIsX || solIsY
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         for (const pos of entry.lbPairPositionsData as any[]) {
@@ -136,15 +156,21 @@ const resolver: AmmResolver = {
           if (seen.has(key)) continue
           seen.add(key)
           const pd = pos.positionData
-          const solAtom = solIsX
-            ? BigInt(pd.totalXAmount.toString())
-            : BigInt(pd.totalYAmount.toString())
-          const otherAtom = solIsX
-            ? BigInt(pd.totalYAmount.toString())
-            : BigInt(pd.totalXAmount.toString())
+
+          const xAtom = BigInt(pd.totalXAmount.toString())
+          const yAtom = BigInt(pd.totalYAmount.toString())
+          const solAtom = solIsX ? xAtom : solIsY ? yAtom : 0n
+          const stacAtom = stacIsX ? xAtom : stacIsY ? yAtom : 0n
+          // "Other" amount = whichever side isn't SOL and isn't stacSOL.
+          // On WSOL/stacSOL, both sides are accounted for → other is 0.
+          const otherAtom = isWsolStac
+            ? 0n
+            : solIsX || stacIsX
+            ? yAtom
+            : xAtom
 
           let mirrored: { lower: number; upper: number } | null = null
-          if (target) {
+          if (target && hasSol) {
             try {
               mirrored = mirrorBinRange(
                 lbPair.binStep,
@@ -159,25 +185,41 @@ const resolver: AmmResolver = {
             }
           }
 
+          const state =
+            hasStac
+              ? 'already-stacsol'
+              : target && mirrored
+              ? 'migratable'
+              : 'pending-target'
+
+          // Build a sensible label: "SOL / X" for SOL-paired, "stacSOL / X" for
+          // stacSOL-paired (or "SOL / stacSOL" for the primary pool).
+          const otherSym = target?.name ?? otherMint.slice(0, 6) + '…'
+          const leftSym = hasSol ? 'SOL' : 'stacSOL'
+          const poolLabel = isWsolStac
+            ? 'SOL / stacSOL'
+            : `${leftSym} / ${otherSym}`
+
           out.push({
             amm: 'meteora-dlmm',
             positionId: key,
             poolAddress: poolKey,
-            poolLabel: `SOL / ${target?.name ?? otherMint.slice(0, 6) + '…'}`,
+            poolLabel,
             solAtom,
+            stacAtom,
             otherMint,
-            otherSymbol: target?.name ?? '?',
+            otherSymbol: otherSym,
             otherDecimals: target?.decimals ?? 9,
             otherAtom,
             range: { lower: pd.lowerBinId, upper: pd.upperBinId },
-            hasTarget: target != null && mirrored != null,
+            state,
             raw: {
               ownership,
               srcBinStep: lbPair.binStep,
               solIsX,
               targetLower: mirrored?.lower ?? 0,
               targetUpper: mirrored?.upper ?? 0,
-              targetPool: target!,
+              targetPool: target ?? null,
               lowerBinId: pd.lowerBinId,
               upperBinId: pd.upperBinId,
             } as DlmmRaw,
@@ -192,6 +234,9 @@ const resolver: AmmResolver = {
 
   async buildCloseTxs(connection, wallet, pos): Promise<CloseResult> {
     const r = pos.raw as DlmmRaw
+    if (pos.state === 'already-stacsol') {
+      throw new Error('position is already stacSOL — nothing to migrate')
+    }
     if (r.ownership !== 'hawkfi') {
       throw new Error('direct-owned DLMM close — wiring soon')
     }

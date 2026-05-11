@@ -136,7 +136,7 @@ export default function Liqmonsta() {
   }, [publicKey, connection, resolvers])
 
   const migratable = useMemo(
-    () => positions.filter((p) => p.hasTarget),
+    () => positions.filter((p) => p.state === 'migratable'),
     [positions],
   )
 
@@ -534,6 +534,22 @@ function ammBadgeColor(amm: AmmType) {
   }
 }
 
+function stateColor(state: RawPosition['state']) {
+  return state === 'migratable'
+    ? 'var(--color-green)'
+    : state === 'already-stacsol'
+    ? 'var(--color-ember)'
+    : 'var(--color-warn)'
+}
+
+function stateLabel(state: RawPosition['state']) {
+  return state === 'migratable'
+    ? 'migratable'
+    : state === 'already-stacsol'
+    ? 'already stacSOL'
+    : 'target pool — wiring soon'
+}
+
 function PositionList({ positions }: { positions: RawPosition[] }) {
   if (positions.length === 0) return null
   return (
@@ -542,8 +558,9 @@ function PositionList({ positions }: { positions: RawPosition[] }) {
         positions
       </div>
       {positions.map((p) => {
-        const c = p.hasTarget ? 'var(--color-green)' : 'var(--color-warn)'
+        const c = stateColor(p.state)
         const solUi = Number(p.solAtom) / LAMPORTS_PER_SOL
+        const stacUi = Number(p.stacAtom) / 1e9
         const otherUi = Number(p.otherAtom) / Math.pow(10, p.otherDecimals)
         const ammC = ammBadgeColor(p.amm)
         return (
@@ -567,11 +584,12 @@ function PositionList({ positions }: { positions: RawPosition[] }) {
                   >
                     {p.poolLabel}
                   </span>
-                  {!p.hasTarget && (
-                    <span className="text-[10px] uppercase tracking-[2px] text-[var(--color-warn)]">
-                      target pool — wiring soon
-                    </span>
-                  )}
+                  <span
+                    className="text-[10px] uppercase tracking-[2px]"
+                    style={{ color: c }}
+                  >
+                    {stateLabel(p.state)}
+                  </span>
                 </div>
                 <div className="mt-1 font-mono text-[11px] text-[var(--color-dim)] truncate">
                   {p.positionId.slice(0, 8)}…{p.positionId.slice(-6)}
@@ -579,8 +597,24 @@ function PositionList({ positions }: { positions: RawPosition[] }) {
               </div>
               <div className="text-right shrink-0">
                 <div className="tabular-mono text-[13px] font-black text-[var(--color-fg)]">
-                  {p.solAtom > 0n ? solUi.toFixed(4) : '?'} SOL +{' '}
-                  {p.otherAtom > 0n ? otherUi.toFixed(2) : '?'} {p.otherSymbol}
+                  {p.solAtom > 0n && `${solUi.toFixed(4)} SOL`}
+                  {p.stacAtom > 0n && (
+                    <>
+                      {p.solAtom > 0n && ' + '}
+                      {stacUi.toFixed(4)} stacSOL
+                    </>
+                  )}
+                  {p.otherAtom > 0n && (
+                    <>
+                      {(p.solAtom > 0n || p.stacAtom > 0n) && ' + '}
+                      {otherUi.toFixed(2)} {p.otherSymbol}
+                    </>
+                  )}
+                  {p.solAtom === 0n && p.stacAtom === 0n && p.otherAtom === 0n && (
+                    <span className="text-[var(--color-dim)]">
+                      ?
+                    </span>
+                  )}
                 </div>
                 {p.range && (
                   <div className="text-[10px] text-[var(--color-dim)] uppercase tracking-wider">

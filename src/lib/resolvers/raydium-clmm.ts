@@ -153,12 +153,13 @@ const resolver: AmmResolver = {
         poolAddress: poolId,
         poolLabel: `SOL / ${otherSymbol}`,
         solAtom: 0n,
+        stacAtom: 0n,
         otherMint,
         otherSymbol,
         otherDecimals: solIsA ? decB : decA,
         otherAtom: 0n,
         range: { lower: pos.tickLower, upper: pos.tickUpper },
-        hasTarget: false, // no curated stacSOL CLMM pools yet
+        state: 'pending-target', // no curated stacSOL CLMM pools yet
         raw: {
           poolId,
           positionNftMint: nftMint,

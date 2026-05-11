@@ -186,11 +186,12 @@ const resolver: AmmResolver = {
           poolAddress: p.id ?? lpMint,
           poolLabel: `SOL / ${target?.otherSymbol ?? p.mintB?.symbol ?? otherMint.slice(0, 6) + '…'}`,
           solAtom,
+          stacAtom: 0n,
           otherMint,
           otherSymbol: target?.otherSymbol ?? (p.mintB?.symbol ?? '?'),
           otherDecimals: solIsA ? decB : decA,
           otherAtom,
-          hasTarget: target != null,
+          state: target ? 'migratable' : 'pending-target',
           raw: {
             srcPoolId: p.id,
             lpMint,
