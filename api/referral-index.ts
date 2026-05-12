@@ -40,6 +40,7 @@ interface IndexerCursor {
 
 interface ReferralRow {
   sig: string
+  ixIndex: number
   slot: number
   ts: Date
   referrer: string
@@ -119,10 +120,43 @@ function extractCredits(sig: string, tx: ParsedTransactionRpc): ReferralRow[] {
     balByAta.set(ata, after - before)
   }
 
+  // Pre-compute per-ATA total deposit lamports across ALL candidate ixs in
+  // this tx. The pre/post token-balance map (balByAta) gives us a single
+  // cross-tx delta per ATA; when a single tx has multiple DepositSol ixs
+  // crediting the same referrer (or manager) ATA — zap routers, multi-leg
+  // deposits — that delta is the SUM of every kickback. To get per-ix
+  // shares we split proportionally by each ix's deposit lamports. NAV is
+  // constant within a single tx, so the lamports ratio = the kickback ratio
+  // exactly.
+  //
+  // Without this split, the old code (a) recorded a single (sig)-keyed row
+  // carrying the WHOLE tx delta as that one ix's fee_stacsol, and (b)
+  // dropped the remaining N-1 ixs at the PK conflict. Net effect was
+  // fee_stacsol × N, sol_lamports × (1/N), apparent ROI inflated to N²×
+  // the real 3.45% ratio on the referrers leaderboard.
+  const lampsByReferrerAta = new Map<string, bigint>()
+  const lampsByManagerAta = new Map<string, bigint>()
+  for (const ix of candidates) {
+    const accs = ix.accounts ?? []
+    if (accs.length <= REFERRER_ACCOUNT_INDEX) continue
+    const bytes = decodeIxData(ix.data)
+    if (!bytes) continue
+    const lams = readU64LE(bytes, 1)
+    const rAta = accs[REFERRER_ACCOUNT_INDEX]
+    const mAta = accs[MANAGER_FEE_ACCOUNT_INDEX]
+    if (rAta) lampsByReferrerAta.set(rAta, (lampsByReferrerAta.get(rAta) ?? 0n) + lams)
+    if (mAta) lampsByManagerAta.set(mAta, (lampsByManagerAta.get(mAta) ?? 0n) + lams)
+  }
+  const splitDelta = (delta: bigint, totalAtaLamps: bigint, ixLamps: bigint): bigint => {
+    if (totalAtaLamps <= 0n) return delta
+    return (delta * ixLamps) / totalAtaLamps
+  }
+
   const slot = tx.slot
   const ts = new Date((tx.blockTime ?? Math.floor(Date.now() / 1000)) * 1000)
   const out: ReferralRow[] = []
-  for (const ix of candidates) {
+  for (let i = 0; i < candidates.length; i++) {
+    const ix = candidates[i]
     const accs = ix.accounts ?? []
     if (accs.length <= REFERRER_ACCOUNT_INDEX) continue
     const referrerAta = accs[REFERRER_ACCOUNT_INDEX]
@@ -145,23 +179,43 @@ function extractCredits(sig: string, tx: ParsedTransactionRpc): ReferralRow[] {
     // fee — and on a self-referral, the manager ATA is distinct from
     // destAta and therefore not contaminated. We use it as the canonical
     // signal whenever referrerAta collides with destAta.
-    const referrerDelta = balByAta.get(referrerAta) ?? 0n
-    const managerDelta = balByAta.get(managerAta) ?? 0n
+    //
+    // All three branches go through splitDelta to attribute the per-ATA
+    // cross-tx delta proportionally to *this* ix's deposit lamports — the
+    // delta value is the same for every ix in the loop, so the split is
+    // what makes the per-row math right.
+    const referrerDeltaTx = balByAta.get(referrerAta) ?? 0n
+    const managerDeltaTx = balByAta.get(managerAta) ?? 0n
     let feeDelta: bigint
     if (referrerAta && destAta && referrerAta === destAta && managerAta !== destAta) {
       // self-referral path → use manager-leg as the canonical kickback
-      feeDelta = managerDelta
+      feeDelta = splitDelta(
+        managerDeltaTx,
+        lampsByManagerAta.get(managerAta) ?? 0n,
+        solLamports,
+      )
     } else if (referrerAta && managerAta && referrerAta === managerAta) {
       // depositor self-referred AND happens to be the manager — both legs
-      // collapse into one ATA delta which is 2× the actual kickback.
-      feeDelta = referrerDelta / 2n
+      // collapse into one ATA delta which is 2× the actual kickback for
+      // every contributing ix; split per-ix then halve.
+      const shared = splitDelta(
+        referrerDeltaTx,
+        lampsByReferrerAta.get(referrerAta) ?? 0n,
+        solLamports,
+      )
+      feeDelta = shared / 2n
     } else {
-      // clean 3-party deposit → delta on referrer ATA = pure kickback
-      feeDelta = referrerDelta
+      // clean 3-party deposit → split referrer-leg delta proportionally
+      feeDelta = splitDelta(
+        referrerDeltaTx,
+        lampsByReferrerAta.get(referrerAta) ?? 0n,
+        solLamports,
+      )
     }
     if (feeDelta <= 0n) continue
     out.push({
       sig,
+      ixIndex: i,
       slot,
       ts,
       referrer: '',
@@ -231,11 +285,12 @@ async function processBatch(
   for (const r of filled) {
     const result = await getPool().query(
       `INSERT INTO referral_credits
-        (sig, slot, ts, referrer, referrer_ata, depositor, sol_lamports, fee_stacsol)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       ON CONFLICT (sig) DO NOTHING`,
+        (sig, ix_index, slot, ts, referrer, referrer_ata, depositor, sol_lamports, fee_stacsol)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       ON CONFLICT (sig, ix_index) DO NOTHING`,
       [
         r.sig,
+        r.ixIndex,
         r.slot,
         r.ts,
         r.referrer,

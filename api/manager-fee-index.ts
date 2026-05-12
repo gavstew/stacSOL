@@ -128,6 +128,33 @@ function extractCredits(sig: string, tx: ParsedTransactionRpc): ManagerFeeRow[] 
     balByAta.set(ata, after - before)
   }
 
+  // Pre-compute per-ATA total deposit lamports across all candidate ixs
+  // in this tx. Same reasoning as referral-index: when a tx has multiple
+  // DepositSol ixs crediting the same manager (or referrer) ATA, the
+  // pre/post token-balance delta on that ATA is the SUM of every
+  // contributing kickback. The PK on manager_fee_credits is already
+  // (sig, ix_index) so we DID insert N rows, but each row carried the
+  // full tx-wide delta — i.e. fee was over-counted ×N for multi-ix txs.
+  // Proportional split by deposit lamports restores per-ix accuracy
+  // (NAV is constant within a single tx, so lamports ratio = fee ratio).
+  const lampsByManagerAta = new Map<string, bigint>()
+  const lampsByReferrerAta = new Map<string, bigint>()
+  for (const ix of candidates) {
+    const accs = ix.accounts ?? []
+    if (accs.length <= REFERRER_ACCOUNT_INDEX) continue
+    const bytes = decodeIxData(ix.data)
+    if (!bytes) continue
+    const lams = readU64LE(bytes, 1)
+    const mAta = accs[MANAGER_FEE_ACCOUNT_INDEX]
+    const rAta = accs[REFERRER_ACCOUNT_INDEX]
+    if (mAta) lampsByManagerAta.set(mAta, (lampsByManagerAta.get(mAta) ?? 0n) + lams)
+    if (rAta) lampsByReferrerAta.set(rAta, (lampsByReferrerAta.get(rAta) ?? 0n) + lams)
+  }
+  const splitDelta = (delta: bigint, totalAtaLamps: bigint, ixLamps: bigint): bigint => {
+    if (totalAtaLamps <= 0n) return delta
+    return (delta * ixLamps) / totalAtaLamps
+  }
+
   const slot = tx.slot
   const ts = new Date((tx.blockTime ?? Math.floor(Date.now() / 1000)) * 1000)
   const out: ManagerFeeRow[] = []
@@ -146,17 +173,34 @@ function extractCredits(sig: string, tx: ParsedTransactionRpc): ManagerFeeRow[] 
     // also the depositor (manager self-mints) the destAta == managerAta
     // and balByAta inflates the manager fee to ~full mint output. Use
     // the referrer leg as canonical (50/50 split → equal magnitude).
-    const managerDelta = balByAta.get(managerAta) ?? 0n
-    const referrerDelta = balByAta.get(referrerAta) ?? 0n
+    //
+    // Every branch goes through splitDelta so the per-ix fee = (this ix's
+    // share of total deposit lamports landing in this ATA) × (cross-tx
+    // delta on that ATA). Single-ix txs come out identical to before.
+    const managerDeltaTx = balByAta.get(managerAta) ?? 0n
+    const referrerDeltaTx = balByAta.get(referrerAta) ?? 0n
     let feeDelta: bigint
     if (managerAta && destAta && managerAta === destAta && referrerAta !== destAta) {
       // manager self-deposit → use referrer-leg as canonical fee signal
-      feeDelta = referrerDelta
+      feeDelta = splitDelta(
+        referrerDeltaTx,
+        lampsByReferrerAta.get(referrerAta) ?? 0n,
+        solLamports,
+      )
     } else if (managerAta && referrerAta && managerAta === referrerAta) {
-      // collapsed legs → halve to recover one side's share
-      feeDelta = managerDelta / 2n
+      // collapsed legs → split, then halve to recover one side's share
+      const shared = splitDelta(
+        managerDeltaTx,
+        lampsByManagerAta.get(managerAta) ?? 0n,
+        solLamports,
+      )
+      feeDelta = shared / 2n
     } else {
-      feeDelta = managerDelta
+      feeDelta = splitDelta(
+        managerDeltaTx,
+        lampsByManagerAta.get(managerAta) ?? 0n,
+        solLamports,
+      )
     }
     if (feeDelta <= 0n) continue
     out.push({

@@ -14,10 +14,13 @@ import {
 
 import './index.css'
 import { RPC_URL } from './lib/constants'
+import { ThemeToggle } from './components/ThemeToggle'
 
-// Route components are lazy-loaded so visiting / only ships the App bundle,
-// not Guide/Liquidity/SingleSided/Portfolio. Critical for mobile in-app
-// browsers (Phantom, Trust) that OOM-crash on multi-MB JS payloads.
+// Route components are lazy-loaded so visiting / only ships the Landing
+// bundle, not the wallet-adapter / Solana web3 chunk. Critical for mobile
+// in-app browsers (Phantom, Trust) that OOM-crash on multi-MB JS payloads —
+// the marketing landing has zero wallet dependency.
+const Landing = lazy(() => import('./Landing.tsx'))
 const App = lazy(() => import('./App.tsx'))
 const Guide = lazy(() => import('./Guide.tsx'))
 const Liquidity = lazy(() => import('./Liquidity.tsx'))
@@ -73,6 +76,10 @@ const isFaq = path === '/faq' || path.startsWith('/faq/')
 const isLeaderboard = path === '/leaderboard' || path.startsWith('/leaderboard/')
 const isBaitscope = path === '/baitscope' || path.startsWith('/baitscope/')
 const isLiqmonsta = path === '/liqmonsta' || path.startsWith('/liqmonsta/')
+// The dashboard (mint/burn/wrap/position) used to live at `/`. It now
+// lives at `/app` so `/` can serve the marketing landing without dragging
+// the wallet-adapter / Solana web3 chunk on first paint.
+const isApp = path === '/app' || path.startsWith('/app/')
 
 function RouteFallback() {
   return (
@@ -84,6 +91,9 @@ function RouteFallback() {
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
+    {/* Theme toggle sits outside Suspense so it's visible the moment
+        the bundle loads, even while a route is still resolving. */}
+    <ThemeToggle />
     <Suspense fallback={<RouteFallback />}>
       {isGuide ? (
         <Guide />
@@ -116,10 +126,16 @@ createRoot(document.getElementById('root')!).render(
         <Providers>
           <Liqmonsta />
         </Providers>
-      ) : (
+      ) : isApp ? (
+        // The mint / burn / wrap / position dashboard. Wallet-adapter
+        // mounted here only — the marketing landing at `/` stays clean.
         <Providers>
           <App />
         </Providers>
+      ) : (
+        // Default `/` → marketing landing. Pure static, no wallet provider
+        // (CTAs link out to /app which mounts the providers on demand).
+        <Landing />
       )}
     </Suspense>
   </StrictMode>,

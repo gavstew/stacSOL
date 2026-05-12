@@ -206,10 +206,18 @@ export default function Liqmonsta() {
     }
 
     // 2. Build mint stacSOL tx.
-    // We don't know the exact SOL recovered until close confirms; deposit
-    // the estimate minus a small buffer for fees/rent (0.005 SOL).
+    //
+    // We don't know the exact SOL recovered until close confirms — the
+    // pool's reserves may have drifted between scan and execution, and on
+    // some pools the close-resulting balance is materially less than the
+    // scan-time estimate (observed: SOL/Staccana CPMM close returning ~88%
+    // of scan estimate). The previous absolute 0.005 SOL buffer broke when
+    // the gap exceeded the buffer, with `Custom 1 — insufficient lamports`
+    // on the deposit-sol transfer. We now apply a percentage haircut
+    // (10%) so the mint deposit survives reserve drift up to ±10%, plus an
+    // absolute 0.005 SOL pad for close-tx fees / jito tip / rent edges.
     const recoveredSolEstimate = Number(closeResult.estSolAtom) / LAMPORTS_PER_SOL
-    const depositSolEstimate = Math.max(0, recoveredSolEstimate - 0.005)
+    const depositSolEstimate = Math.max(0, recoveredSolEstimate * 0.9 - 0.005)
     const lamportsToDeposit = BigInt(Math.floor(depositSolEstimate * LAMPORTS_PER_SOL))
     const stacPool = await fetchPool(connection)
     if (!stacPool) throw new Error('stacsol pool state unreadable')

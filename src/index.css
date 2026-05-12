@@ -1,22 +1,25 @@
 @import "tailwindcss";
 @import "@solana/wallet-adapter-react-ui/styles.css";
+/* Palette variables live in theme.css and are driven by [data-theme] on
+   the <html> element (set pre-paint by the no-FOUC inline script in
+   index.html). Keeping them out of @theme below avoids Tailwind treating
+   them as compile-time constants — they need to switch at runtime. */
+@import "./theme.css";
 
 @theme {
-  /* darker, deeper bg */
-  --color-bg: #080203;
-  --color-bg2: #160809;
-  /* main text is now warm cream — orange was overwhelming */
-  --color-fg: #f6e7d3;
-  /* hot red kept for accents/headings only */
-  --color-hot: #ff2200;
-  /* mid-orange for emphasis sub-text */
-  --color-ember: #ff7733;
-  --color-warn: #ffcc00;
-  /* cooler dim */
-  --color-dim: #6b4435;
-  --color-green: #22ee88;
   --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace;
   --font-display: "Inter", system-ui, sans-serif;
+  /* Marketing-landing palette (used by src/Landing.tsx). Kept in @theme
+     because it is constant across light/dark — the landing has a single
+     visual treatment regardless of the user's app-side theme preference. */
+  --color-stak-bg: #050807;
+  --color-stak-bg-soft: #0c1110;
+  --color-stak-fg: #ecf6f1;
+  --color-stak-dim: #7a8c83;
+  --color-stak-line: #1a2421;
+  --color-stak-mint: #7ce4b7;
+  --color-stak-lime: #b8f04f;
+  --color-stak-cream: #f3efe6;
 }
 
 /* Display font for headings (h1, section h2). Body stays mono for that
@@ -25,16 +28,15 @@ h1, h2 { font-family: var(--font-display); }
 .tabular-mono { font-variant-numeric: tabular-nums; font-family: var(--font-mono); }
 
 @keyframes flash {
-  0%   { color: var(--color-hot); text-shadow: 0 0 6px rgba(255, 51, 0, 0.6); }
-  100% { /* settle to inherited */ }
+  0% { color: var(--color-hot); text-shadow: 0 0 6px var(--color-flash-glow); }
 }
 
 @keyframes flicker {
-  0%, 100% { opacity: 1; text-shadow: 0 0 4px var(--color-hot), 0 0 12px rgba(255,34,0,0.55); }
+  0%, 100% { opacity: 1; text-shadow: 0 0 4px var(--color-hot), 0 0 12px var(--color-card-hover-shadow1); }
   47%      { opacity: 0.85; text-shadow: 0 0 2px var(--color-hot); }
-  49%      { opacity: 1; text-shadow: 0 0 4px var(--color-hot), 0 0 12px rgba(255,34,0,0.55); }
+  49%      { opacity: 1; text-shadow: 0 0 4px var(--color-hot), 0 0 12px var(--color-card-hover-shadow1); }
   53%      { opacity: 0.7; text-shadow: 0 0 8px var(--color-hot); }
-  55%      { opacity: 1; text-shadow: 0 0 4px var(--color-hot), 0 0 12px rgba(255,34,0,0.55); }
+  55%      { opacity: 1; text-shadow: 0 0 4px var(--color-hot), 0 0 12px var(--color-card-hover-shadow1); }
 }
 
 @keyframes scanline {
@@ -42,7 +44,33 @@ h1, h2 { font-family: var(--font-display); }
   100% { transform: translateY(120%); }
 }
 
-/* Card hover — more dramatic. Scale, glow, top-edge highlight. */
+/* Marquee animations for the landing page's scrolling word strips. The
+   content inside the track is duplicated in markup so a 0 → -50% slide
+   produces seamless infinite looping (the second copy slides into the
+   slot the first copy just vacated). */
+@keyframes stak-marquee-left {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+@keyframes stak-marquee-right {
+  from { transform: translateX(-50%); }
+  to   { transform: translateX(0); }
+}
+
+/* Subtle film-grain noise used as the off-white hero backdrop on the
+   landing page. Pure CSS so we don't ship a PNG. */
+.stak-grain {
+  background-color: var(--color-stak-cream);
+  background-image:
+    radial-gradient(rgba(0,0,0,0.06) 1px, transparent 1px),
+    radial-gradient(rgba(0,0,0,0.04) 1px, transparent 1px);
+  background-size: 3px 3px, 7px 7px;
+  background-position: 0 0, 1px 1px;
+}
+
+/* Card hover — more dramatic. Scale, glow, top-edge highlight. All
+   theme-aware via the --color-card-hover-* and --color-card-before-*
+   vars exported from theme.css. */
 .card-hot {
   position: relative;
   transition:
@@ -59,16 +87,16 @@ h1, h2 { font-family: var(--font-display); }
   pointer-events: none;
   opacity: 0;
   transition: opacity 250ms ease;
-  background: linear-gradient(180deg, rgba(255, 34, 0, 0.10), transparent 40%);
+  background: linear-gradient(180deg, var(--color-card-before-gradient), transparent 40%);
 }
 .card-hot:hover {
-  border-color: rgba(255, 34, 0, 0.7) !important;
+  border-color: var(--color-card-hover-border) !important;
   box-shadow:
-    0 0 0 1px rgba(255, 34, 0, 0.55),
-    0 0 28px -6px rgba(255, 34, 0, 0.55),
-    inset 0 1px 0 0 rgba(255, 119, 51, 0.35);
+    0 0 0 1px var(--color-card-hover-shadow1),
+    0 0 28px -6px var(--color-card-hover-shadow2),
+    inset 0 1px 0 0 var(--color-card-hover-shadow3);
   transform: translateY(-2px) scale(1.003);
-  background-color: rgba(28, 8, 9, 1) !important;
+  background-color: var(--color-card-hover-bg) !important;
 }
 .card-hot:hover::before { opacity: 1; }
 
@@ -76,8 +104,8 @@ html, body, #root { height: 100%; }
 body {
   margin: 0;
   background:
-    radial-gradient(ellipse 80% 50% at 50% 0%, #2a0808 0%, transparent 60%),
-    radial-gradient(ellipse 60% 40% at 80% 100%, #200505 0%, transparent 60%),
+    radial-gradient(ellipse 80% 50% at 50% 0%, var(--color-body-radial1) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 80% 100%, var(--color-body-radial2) 0%, transparent 60%),
     var(--color-bg);
   color: var(--color-fg);
   font-family: var(--font-mono);

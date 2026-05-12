@@ -34,14 +34,16 @@ export async function ensureSchema() {
     ALTER TABLE pool_snapshots ADD COLUMN IF NOT EXISTS lp_price_sol DOUBLE PRECISION;
 
     CREATE TABLE IF NOT EXISTS referral_credits (
-      sig TEXT PRIMARY KEY,
+      sig TEXT NOT NULL,
+      ix_index INT NOT NULL DEFAULT 0,
       slot BIGINT NOT NULL,
       ts TIMESTAMPTZ NOT NULL,
       referrer TEXT NOT NULL,
       referrer_ata TEXT NOT NULL,
       depositor TEXT NOT NULL,
       sol_lamports NUMERIC NOT NULL,
-      fee_stacsol NUMERIC NOT NULL
+      fee_stacsol NUMERIC NOT NULL,
+      PRIMARY KEY (sig, ix_index)
     );
     CREATE INDEX IF NOT EXISTS referral_credits_referrer_idx ON referral_credits(referrer);
     CREATE INDEX IF NOT EXISTS referral_credits_ts_idx ON referral_credits(ts DESC);
@@ -54,6 +56,58 @@ export async function ensureSchema() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
     INSERT INTO referral_index_state (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+
+    -- One-shot migration from the legacy single-column PK on referral_credits.
+    -- The old PK was sig alone, which silently dropped all but the first
+    -- DepositSol ix in any multi-ix transaction (zap routers etc.), while
+    -- the inserted row stored the CROSS-TX balance delta (sum of all
+    -- kickbacks in that tx) as its fee_stacsol — so fee was over-counted ×N
+    -- and sol_lamports under-counted ×(1/N). Apparent ROI on the referrers
+    -- leaderboard inflated to N² × the real 3.45% ratio.
+    --
+    -- We detect the legacy schema by counting PK columns on referral_credits.
+    -- If it's still single-column, ensure the ix_index column exists, drop
+    -- the old PK, add the composite PK, truncate the bad rows, and reset
+    -- the indexer cursor so the next cron pass refills correctly.
+    --
+    -- Same treatment for manager_fee_credits (its PK was already composite
+    -- but its indexer had the same cross-tx delta bug — each per-ix row
+    -- carried the full tx-wide delta, over-counting by N for multi-ix txs).
+    DO $referral_pk_migration$
+    DECLARE
+      legacy_pk_cols INT;
+    BEGIN
+      SELECT COALESCE(SUM(1), 0)::INT INTO legacy_pk_cols
+      FROM pg_constraint c
+      JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+      WHERE c.conrelid = 'referral_credits'::regclass
+        AND c.contype = 'p';
+
+      IF legacy_pk_cols = 1 THEN
+        -- Add ix_index column if the legacy table predates it (the CREATE
+        -- TABLE IF NOT EXISTS above is a no-op against an existing table,
+        -- so the new column declaration in the table body doesn't apply).
+        ALTER TABLE referral_credits
+          ADD COLUMN IF NOT EXISTS ix_index INT NOT NULL DEFAULT 0;
+        ALTER TABLE referral_credits DROP CONSTRAINT referral_credits_pkey;
+        ALTER TABLE referral_credits ADD PRIMARY KEY (sig, ix_index);
+        TRUNCATE referral_credits;
+        UPDATE referral_index_state
+           SET newest_sig = NULL, oldest_sig = NULL, backfill_done = FALSE
+           WHERE id = 1;
+        TRUNCATE manager_fee_credits;
+        -- The manager-fee-index state table is created lazily on first
+        -- run of that endpoint, so guard the UPDATE against a fresh DB
+        -- where it may not exist yet.
+        IF EXISTS (SELECT 1 FROM information_schema.tables
+                   WHERE table_name = 'manager_fee_index_state') THEN
+          UPDATE manager_fee_index_state
+             SET newest_sig = NULL, oldest_sig = NULL, backfill_done = FALSE
+             WHERE id = 1;
+        END IF;
+      END IF;
+    END
+    $referral_pk_migration$;
 
     -- Per-tx log of stacSOL credited to the manager_fee_account (account
     -- index 5 of DepositSol). Mirrors referral_credits but for the manager-

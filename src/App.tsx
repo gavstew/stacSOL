@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react'
 import { Stats, Card } from './components/Stats'
 import { YieldCalc } from './components/YieldCalc'
 import { Action } from './components/Action'
+import { Wrap } from './components/Wrap'
 import { Referral } from './components/Referral'
 import { Leaderboard } from './components/Leaderboard'
 import { Manifesto } from './components/Manifesto'
@@ -67,7 +68,7 @@ export default function App() {
           your position) come FIRST, oversized + filled, so a returning user
           can hit the action they want in one tap regardless of scroll
           position. The route chips below stay smaller — secondary surfaces. */}
-      <div className="mb-3 grid grid-cols-3 gap-2">
+      <div className="mb-3 grid grid-cols-4 gap-2">
         <a
           href="#mint"
           className="flex items-center justify-center gap-1.5 px-3 py-3 rounded border-2 border-[var(--color-hot)] bg-[var(--color-hot)] text-black text-[11px] font-black uppercase tracking-[2px] no-underline hover:brightness-110 transition"
@@ -79,6 +80,12 @@ export default function App() {
           className="flex items-center justify-center gap-1.5 px-3 py-3 rounded border-2 border-[var(--color-warn)] bg-[var(--color-warn)] text-black text-[11px] font-black uppercase tracking-[2px] no-underline hover:brightness-110 transition"
         >
           ↓ burn
+        </a>
+        <a
+          href="#wrap"
+          className="flex items-center justify-center gap-1.5 px-3 py-3 rounded border-2 border-[var(--color-hot)] bg-[rgb(255_34_0_/_0.12)] text-[var(--color-hot)] text-[11px] font-black uppercase tracking-[2px] no-underline hover:bg-[rgb(255_34_0_/_0.2)] transition"
+        >
+          ↓ wrap
         </a>
         <a
           href="#position"
@@ -162,6 +169,10 @@ export default function App() {
           appendLog={append}
           lpStacAtom={lpExposure.stacsolAtom}
         />
+      </section>
+
+      <section id="wrap" className="scroll-mt-4">
+        <Wrap onDone={onAction} appendLog={append} />
       </section>
 
       <section id="position" className="scroll-mt-4">

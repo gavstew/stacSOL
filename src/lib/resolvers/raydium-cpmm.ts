@@ -278,7 +278,17 @@ const resolver: AmmResolver = {
       poolKeys,
       inputAmount: new BN(stacAtomEstimate.toString()),
       baseIn,
-      slippage: new Percent(100, 100),
+      // DO NOT use Percent(100, 100) here. The SDK computes
+      //   _slippage = Percent(1, 1).sub(slippage)
+      //   min_lp_amount = _slippage * liquidity
+      // so 100% input → _slippage = 0 → min_lp_amount = 0, which the
+      // cp-swap deposit ix rejects with require_gt!(min_lp_amount, 0)
+      // (`Custom 2505 / RequireGtViolated` at deposit.rs:93). We need a
+      // non-zero `_slippage` so a non-zero min is passed. 99% gives us
+      // _slippage = 1% → min_lp = liquidity × 0.01, which is high enough
+      // to clear require_gt and loose enough to survive real-world ratio
+      // drift between sign and submit.
+      slippage: new Percent(99, 100),
       txVersion: TxVersion.V0,
       txTipConfig: {
         address: pickHeliusTipAccount(),

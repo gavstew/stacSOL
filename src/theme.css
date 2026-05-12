@@ -1,0 +1,191 @@
+/* ── stacSOL theme — ISOLATED from upstream ────────────────────────────────
+ * All palette values live here. Do not put theme vars back into index.css.
+ * Driven by [data-theme] on <html>, set by the no-FOUC inline script in
+ * index.html. Falls back to prefers-color-scheme if JS is disabled.
+ * ─────────────────────────────────────────────────────────────────────────*/
+
+/* ── Light palette (default / no-JS fallback) ── */
+:root {
+  --color-bg: #f0f6ff;
+  --color-bg2: #e1edf9;
+  --color-fg: #0d2a4a;
+  --color-hot: #1565c0;
+  --color-ember: #1e88e5;
+  --color-warn: #c62828;
+  --color-warn-tint: rgba(198, 40, 40, 0.08);
+  --color-dim: #4a6a8a;
+  --color-green: #00897b;
+  --color-card-hover-bg: #d6e8f8;
+  --color-card-hover-border: rgba(21, 101, 192, 0.5);
+  --color-card-hover-shadow1: rgba(21, 101, 192, 0.4);
+  --color-card-hover-shadow2: rgba(21, 101, 192, 0.25);
+  --color-card-hover-shadow3: rgba(30, 136, 229, 0.2);
+  --color-card-before-gradient: rgba(21, 101, 192, 0.07);
+  --color-body-radial1: #1565c014;
+  --color-body-radial2: #1565c00d;
+  --color-flash-glow: rgba(21, 101, 192, 0.6);
+}
+
+/* ── Dark palette (no-JS system-preference fallback) ── */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #080203;
+    --color-bg2: #160809;
+    --color-fg: #f6e7d3;
+    --color-hot: #ff2200;
+    --color-ember: #ff7733;
+    --color-warn: #ffcc00;
+    --color-warn-tint: rgba(255, 204, 0, 0.08);
+    --color-dim: #6b4435;
+    --color-green: #22ee88;
+    --color-card-hover-bg: #1c0809;
+    --color-card-hover-border: rgba(255, 34, 0, 0.7);
+    --color-card-hover-shadow1: rgba(255, 34, 0, 0.55);
+    --color-card-hover-shadow2: rgba(255, 34, 0, 0.55);
+    --color-card-hover-shadow3: rgba(255, 119, 51, 0.35);
+    --color-card-before-gradient: rgba(255, 34, 0, 0.10);
+    --color-body-radial1: #2a0808;
+    --color-body-radial2: #200505;
+    --color-flash-glow: rgba(255, 34, 0, 0.53);
+  }
+}
+
+/* ── JS-driven overrides — always win (set before paint by inline script) ── */
+[data-theme="light"] {
+  --color-bg: #f0f6ff;
+  --color-bg2: #e1edf9;
+  --color-fg: #0d2a4a;
+  --color-hot: #1565c0;
+  --color-ember: #1e88e5;
+  --color-warn: #c62828;
+  --color-warn-tint: rgba(198, 40, 40, 0.08);
+  --color-dim: #4a6a8a;
+  --color-green: #00897b;
+  --color-card-hover-bg: #d6e8f8;
+  --color-card-hover-border: rgba(21, 101, 192, 0.5);
+  --color-card-hover-shadow1: rgba(21, 101, 192, 0.4);
+  --color-card-hover-shadow2: rgba(21, 101, 192, 0.25);
+  --color-card-hover-shadow3: rgba(30, 136, 229, 0.2);
+  --color-card-before-gradient: rgba(21, 101, 192, 0.07);
+  --color-body-radial1: #1565c014;
+  --color-body-radial2: #1565c00d;
+  --color-flash-glow: rgba(21, 101, 192, 0.6);
+}
+
+[data-theme="dark"] {
+  --color-bg: #080203;
+  --color-bg2: #160809;
+  --color-fg: #f6e7d3;
+  --color-hot: #ff2200;
+  --color-ember: #ff7733;
+  --color-warn: #ffcc00;
+  --color-warn-tint: rgba(255, 204, 0, 0.08);
+  --color-dim: #6b4435;
+  --color-green: #22ee88;
+  --color-card-hover-bg: #1c0809;
+  --color-card-hover-border: rgba(255, 34, 0, 0.7);
+  --color-card-hover-shadow1: rgba(255, 34, 0, 0.55);
+  --color-card-hover-shadow2: rgba(255, 34, 0, 0.55);
+  --color-card-hover-shadow3: rgba(255, 119, 51, 0.35);
+  --color-card-before-gradient: rgba(255, 34, 0, 0.10);
+  --color-body-radial1: #2a0808;
+  --color-body-radial2: #200505;
+  --color-flash-glow: rgba(255, 34, 0, 0.53);
+}
+
+/* ── Light-mode tint remaps ─────────────────────────────────────────────────
+ * Tailwind's arbitrary-value classes bake in dark-palette RGB values.
+ * In light mode those values (fire-red, ember-orange, warn-amber) must map
+ * to their light-palette equivalents:
+ *   hot red  (255 34 0 / 255 51 0)   → blue   #1565c0 = rgba(21,101,192)
+ *   ember    (255 119 51)             → blue   #1e88e5 = rgba(30,136,229)
+ *   warn     (255 204 0)              → red    #c62828 = rgba(198,40,40)
+ *
+ * [data-theme="light"] wins via specificity over the bare class selectors.
+ * The inline script in index.html always sets data-theme, so no fallback
+ * @media block is needed here for JS-enabled browsers (all of them for this
+ * Solana app). A prefers-color-scheme fallback is kept in index.css for
+ * completeness.
+ * ─────────────────────────────────────────────────────────────────────────*/
+
+/* ── hot red → blue ── */
+[data-theme="light"] .border-\[rgb\(255_34_0_\/_0\.06\)\]   { border-color: rgba(21, 101, 192, 0.06); }
+[data-theme="light"] .border-\[rgb\(255_34_0_\/_0\.08\)\]   { border-color: rgba(21, 101, 192, 0.08); }
+[data-theme="light"] .border-\[rgb\(255_34_0_\/_0\.1\)\]    { border-color: rgba(21, 101, 192, 0.10); }
+[data-theme="light"] .border-\[rgb\(255_34_0_\/_0\.10\)\]   { border-color: rgba(21, 101, 192, 0.10); }
+[data-theme="light"] .border-\[rgb\(255_34_0_\/_0\.12\)\]   { border-color: rgba(21, 101, 192, 0.12); }
+[data-theme="light"] .border-\[rgb\(255_34_0_\/_0\.15\)\]   { border-color: rgba(21, 101, 192, 0.15); }
+[data-theme="light"] .border-\[rgb\(255_34_0_\/_0\.18\)\]   { border-color: rgba(21, 101, 192, 0.18); }
+[data-theme="light"] .border-\[rgb\(255_34_0_\/_0\.2\)\]    { border-color: rgba(21, 101, 192, 0.20); }
+[data-theme="light"] .border-\[rgb\(255_34_0_\/_0\.22\)\]   { border-color: rgba(21, 101, 192, 0.22); }
+[data-theme="light"] .border-\[rgb\(255_34_0_\/_0\.25\)\]   { border-color: rgba(21, 101, 192, 0.25); }
+[data-theme="light"] .border-\[rgb\(255_34_0_\/_0\.3\)\]    { border-color: rgba(21, 101, 192, 0.30); }
+[data-theme="light"] .border-\[rgb\(255_34_0_\/_0\.32\)\]   { border-color: rgba(21, 101, 192, 0.32); }
+[data-theme="light"] .border-\[rgb\(255_34_0_\/_0\.35\)\]   { border-color: rgba(21, 101, 192, 0.35); }
+[data-theme="light"] .border-\[rgb\(255_34_0_\/_0\.4\)\]    { border-color: rgba(21, 101, 192, 0.40); }
+[data-theme="light"] .border-\[rgb\(255_51_0_\/_0\.18\)\]   { border-color: rgba(21, 101, 192, 0.18); }
+[data-theme="light"] .border-\[rgb\(255_51_0_\/_0\.2\)\]    { border-color: rgba(21, 101, 192, 0.20); }
+[data-theme="light"] .border-\[rgb\(255_51_0_\/_0\.35\)\]   { border-color: rgba(21, 101, 192, 0.35); }
+[data-theme="light"] .border-\[rgb\(255_51_0_\/_0\.4\)\]    { border-color: rgba(21, 101, 192, 0.40); }
+[data-theme="light"] .bg-\[rgb\(255_34_0_\/_0\.04\)\]       { background-color: rgba(21, 101, 192, 0.04); }
+[data-theme="light"] .bg-\[rgb\(255_34_0_\/_0\.05\)\]       { background-color: rgba(21, 101, 192, 0.05); }
+[data-theme="light"] .bg-\[rgb\(255_34_0_\/_0\.06\)\]       { background-color: rgba(21, 101, 192, 0.06); }
+[data-theme="light"] .bg-\[rgb\(255_34_0_\/_0\.08\)\]       { background-color: rgba(21, 101, 192, 0.08); }
+[data-theme="light"] .bg-\[rgb\(255_51_0_\/_0\.04\)\]       { background-color: rgba(21, 101, 192, 0.04); }
+[data-theme="light"] .bg-\[rgb\(255_51_0_\/_0\.06\)\]       { background-color: rgba(21, 101, 192, 0.06); }
+[data-theme="light"] .bg-\[rgb\(255_51_0_\/_0\.08\)\]       { background-color: rgba(21, 101, 192, 0.08); }
+[data-theme="light"] .bg-\[rgb\(255_51_0_\/_0\.12\)\]       { background-color: rgba(21, 101, 192, 0.12); }
+[data-theme="light"] .hover\:bg-\[rgb\(255_34_0_\/_0\.04\)\]:hover  { background-color: rgba(21, 101, 192, 0.04); }
+[data-theme="light"] .hover\:bg-\[rgb\(255_34_0_\/_0\.06\)\]:hover  { background-color: rgba(21, 101, 192, 0.06); }
+[data-theme="light"] .hover\:bg-\[rgb\(255_34_0_\/_0\.1\)\]:hover   { background-color: rgba(21, 101, 192, 0.10); }
+[data-theme="light"] .hover\:bg-\[rgb\(255_34_0_\/_0\.12\)\]:hover  { background-color: rgba(21, 101, 192, 0.12); }
+[data-theme="light"] .hover\:bg-\[rgb\(255_34_0_\/_0\.14\)\]:hover  { background-color: rgba(21, 101, 192, 0.14); }
+[data-theme="light"] .hover\:bg-\[rgb\(255_51_0_\/_0\.06\)\]:hover  { background-color: rgba(21, 101, 192, 0.06); }
+[data-theme="light"] .hover\:bg-\[rgb\(255_51_0_\/_0\.08\)\]:hover  { background-color: rgba(21, 101, 192, 0.08); }
+[data-theme="light"] .enabled\:hover\:bg-\[rgb\(255_51_0_\/_0\.08\)\]:enabled:hover { background-color: rgba(21, 101, 192, 0.08); }
+
+/* ── ember orange → lighter blue ── */
+[data-theme="light"] .border-\[rgb\(255_119_51_\/_0\.18\)\] { border-color: rgba(30, 136, 229, 0.18); }
+[data-theme="light"] .border-\[rgb\(255_119_51_\/_0\.35\)\] { border-color: rgba(30, 136, 229, 0.35); }
+[data-theme="light"] .border-\[rgb\(255_119_51_\/_0\.4\)\]  { border-color: rgba(30, 136, 229, 0.40); }
+[data-theme="light"] .border-\[rgb\(255_119_51_\/_0\.5\)\]  { border-color: rgba(30, 136, 229, 0.50); }
+[data-theme="light"] .bg-\[rgb\(255_119_51_\/_0\.06\)\]     { background-color: rgba(30, 136, 229, 0.06); }
+[data-theme="light"] .bg-\[rgb\(255_119_51_\/_0\.08\)\]     { background-color: rgba(30, 136, 229, 0.08); }
+[data-theme="light"] .bg-\[rgb\(255_119_51_\/_0\.1\)\]      { background-color: rgba(30, 136, 229, 0.10); }
+[data-theme="light"] .bg-\[rgb\(255_119_51_\/_0\.10\)\]     { background-color: rgba(30, 136, 229, 0.10); }
+[data-theme="light"] .hover\:bg-\[rgb\(255_119_51_\/_0\.12\)\]:hover { background-color: rgba(30, 136, 229, 0.12); }
+[data-theme="light"] .hover\:bg-\[rgb\(255_119_51_\/_0\.14\)\]:hover { background-color: rgba(30, 136, 229, 0.14); }
+
+/* ── warn amber/yellow → red ── */
+[data-theme="light"] .border-\[rgb\(255_204_0_\/_0\.08\)\]  { border-color: rgba(198, 40, 40, 0.08); }
+[data-theme="light"] .border-\[rgb\(255_204_0_\/_0\.12\)\]  { border-color: rgba(198, 40, 40, 0.12); }
+[data-theme="light"] .border-\[rgb\(255_204_0_\/_0\.18\)\]  { border-color: rgba(198, 40, 40, 0.18); }
+[data-theme="light"] .border-\[rgb\(255_204_0_\/_0\.2\)\]   { border-color: rgba(198, 40, 40, 0.20); }
+[data-theme="light"] .border-\[rgb\(255_204_0_\/_0\.25\)\]  { border-color: rgba(198, 40, 40, 0.25); }
+[data-theme="light"] .border-\[rgb\(255_204_0_\/_0\.3\)\]   { border-color: rgba(198, 40, 40, 0.30); }
+[data-theme="light"] .border-\[rgb\(255_204_0_\/_0\.35\)\]  { border-color: rgba(198, 40, 40, 0.35); }
+[data-theme="light"] .border-\[rgb\(255_204_0_\/_0\.4\)\]   { border-color: rgba(198, 40, 40, 0.40); }
+[data-theme="light"] .bg-\[rgb\(255_204_0_\/_0\.04\)\]      { background-color: rgba(198, 40, 40, 0.04); }
+[data-theme="light"] .bg-\[rgb\(255_204_0_\/_0\.05\)\]      { background-color: rgba(198, 40, 40, 0.05); }
+[data-theme="light"] .bg-\[rgb\(255_204_0_\/_0\.06\)\]      { background-color: rgba(198, 40, 40, 0.06); }
+[data-theme="light"] .bg-\[rgb\(255_204_0_\/_0\.08\)\]      { background-color: rgba(198, 40, 40, 0.08); }
+[data-theme="light"] .bg-\[rgb\(255_204_0_\/_0\.10\)\]      { background-color: rgba(198, 40, 40, 0.10); }
+[data-theme="light"] .hover\:bg-\[rgb\(255_204_0_\/_0\.06\)\]:hover  { background-color: rgba(198, 40, 40, 0.06); }
+[data-theme="light"] .hover\:bg-\[rgb\(255_204_0_\/_0\.1\)\]:hover   { background-color: rgba(198, 40, 40, 0.10); }
+[data-theme="light"] .hover\:bg-\[rgb\(255_204_0_\/_0\.12\)\]:hover  { background-color: rgba(198, 40, 40, 0.12); }
+
+/* ── modal dark backdrop → light bg ── */
+[data-theme="light"] .bg-\[rgba\(8\,2\,3\,0\.85\)\] { background-color: rgba(240, 246, 255, 0.92); }
+
+/* ── text-shadow glow → blue ── */
+[data-theme="light"] .\[text-shadow\:0_0_8px_rgba\(255\,34\,0\,0\.4\)\]   { text-shadow: 0 0 8px rgba(21, 101, 192, 0.4); }
+[data-theme="light"] .\[text-shadow\:0_0_8px_rgba\(255\,34\,0\,0\.5\)\]   { text-shadow: 0 0 8px rgba(21, 101, 192, 0.5); }
+[data-theme="light"] .\[text-shadow\:0_0_10px_rgba\(255\,34\,0\,0\.5\)\,0_0_2px_rgba\(255\,34\,0\,0\.9\)\] {
+  text-shadow: 0 0 10px rgba(21, 101, 192, 0.5), 0 0 2px rgba(21, 101, 192, 0.9);
+}
+[data-theme="light"] .\[text-shadow\:0_0_18px_rgba\(255\,34\,0\,0\.6\)\]  { text-shadow: 0 0 18px rgba(21, 101, 192, 0.6); }
+[data-theme="light"] .\[text-shadow\:0_0_18px_rgba\(255\,34\,0\,0\.7\)\,0_0_48px_rgba\(255\,34\,0\,0\.35\)\,0_0_2px_rgba\(255\,34\,0\,1\)\] {
+  text-shadow: 0 0 18px rgba(21, 101, 192, 0.7), 0 0 48px rgba(21, 101, 192, 0.35), 0 0 2px rgba(21, 101, 192, 1);
+}
+[data-theme="light"] .\[text-shadow\:0_0_24px_rgba\(255\,34\,0\,0\.5\)\]  { text-shadow: 0 0 24px rgba(21, 101, 192, 0.5); }
+[data-theme="light"] .\[text-shadow\:0_0_28px_rgba\(255\,34\,0\,0\.5\)\]  { text-shadow: 0 0 28px rgba(21, 101, 192, 0.5); }

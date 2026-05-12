@@ -465,8 +465,13 @@ async function sendIxs(ixs: TransactionInstruction[], label: string) {
   tx.recentBlockhash = blockhash
   tx.sign(authority)
 
+  // skipPreflight: true — some RPC endpoints (Jito, Triton send-only tiers,
+  // certain Helius plans) reject `simulateTransaction` with "Invalid Request:
+  // running preflight check is not supported." Setting this to false there
+  // makes every send retry-loop forever without ever broadcasting. Since we
+  // pre-validate via withRetry + confirmByPolling, dropping preflight is safe.
   const sig = await withRetry(`${label} send`, () =>
-    conn.sendRawTransaction(tx.serialize(), { skipPreflight: false }),
+    conn.sendRawTransaction(tx.serialize(), { skipPreflight: true }),
   )
   log(`${label} sent ${sig}`)
 

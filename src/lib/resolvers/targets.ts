@@ -226,7 +226,11 @@ async function openOnCpmmTarget(
     poolKeys,
     inputAmount: new BN(stacAtomEstimate.toString()),
     baseIn: stacIsA,
-    slippage: new Percent(100, 100),
+    // 99%, not 100%. Raydium SDK does `_slippage = 1 - slippage`, so 100%
+    // would set min_lp_amount = 0, which the cp-swap deposit ix rejects
+    // with require_gt!(min_lp_amount, 0) → Custom 2505 at deposit.rs:93.
+    // See raydium-cpmm.ts buildOpenTxs for the longer note.
+    slippage: new Percent(99, 100),
     txVersion: TxVersion.V0,
     txTipConfig: {
       address: pickHeliusTipAccount(),
